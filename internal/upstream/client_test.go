@@ -605,10 +605,8 @@ func TestFetchModelsOverlaysV3ConfigCapabilities(t *testing.T) {
 			],"agents":[{"name":"cli","models":["deepseek-v4.1-flash"]}]}}`), nil
 		case strings.HasSuffix(r.URL.Path, "/v3/config"):
 			sawIDE = true
-			// 单路 IDE UA 探测（仓库默认方案，2026-10-09 还原）：
-			// v3 面恒用 codeBuddyIDEUA。
-			if ua := r.Header.Get("User-Agent"); ua != codeBuddyIDEUA {
-				t.Errorf("v3/config UA=%q want %s", ua, codeBuddyIDEUA)
+			if r.Header.Get("User-Agent") != codeBuddyIDEUA {
+				t.Errorf("v3/config UA=%q want %s", r.Header.Get("User-Agent"), codeBuddyIDEUA)
 			}
 			if r.Header.Get("X-Product") != "SaaS" {
 				t.Errorf("X-Product=%q want SaaS", r.Header.Get("X-Product"))

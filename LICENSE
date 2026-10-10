@@ -2,7 +2,10 @@ MIT License
 
 Copyright (c) 2026 Sliverkiss (original project: https://github.com/Sliverkiss/workbuddy2api)
 Copyright (c) 2026 linguo2625469 (this fork: https://github.com/linguo2625469/workbuddy2api-panel)
+<<<<<<< HEAD
 Copyright (c) 2026 workbuddy2api-imgen (derivative: adds OpenAI-compatible image endpoints)
+=======
+>>>>>>> upstream/main
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

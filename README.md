@@ -1,3 +1,5 @@
+> **本仓库由 CN小哈基米 维护**
+
 > **📌 本仓库 `workbuddy2api-imgen` 派生自 `linguo2625469/workbuddy2api-panel`**
 > （上游源头为 `Sliverkiss/workbuddy2api`，套娃派生🤣）
 >
@@ -177,6 +179,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | **安全加固** | 常量时间密钥比较（`internal/httpauth`）、CSP 与安全响应头、UID 白名单防路径穿越、前端属性转义修复 |
 | **领养前置修复** | 上游 `travelAdopt` 缺 report 前置导致领养恒失败于 `first_buddy task not completed yet`；本分支修正后实测 +300 到账（3/3 账号） |
 | **OpenAI 兼容生图** | `POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/images/models`。详见下方「🎨 生图能力」 |
+| **原生工具调用标记还原** | 上游（DeepSeek 系）的工具调用原生语法是带全角竖线的标记文本，**仅在请求声明了 `tools` 时**才被上游解析成结构化 `tool_calls`。实测 `tools` 声明在中转环节（Responses → chat/completions 等）丢失是常态，此时模型仍想调工具，标记就以纯文本落进 `content`——Codex 这类只执行结构化 `function_call` 的客户端会把它当普通正文写进会话历史，回合直接结束、工具一次都没跑。网关在出站响应里识别并还原成 `tool_calls`（流式与非流式都覆盖） |
 
 ### 同步上游
 
@@ -232,8 +235,8 @@ flowchart LR
 ### 方式〇：GHCR 镜像（免克隆免构建）
 
 > **本派生仓库的镜像地址**：`ghcr.io/createxsi/workbuddy2api-imgen:latest`。
-> 本仓库**未预置 CI 工作流**，如需 GHCR 自动构建请自行添加
-> （可参考上游 `linguo2625469/workbuddy2api-panel` 的 workflow）。
+> 本仓库已预置 CI workflow（`.github/workflows/docker-publish.yml`），
+> `main` 分支推送自动构建多架构镜像（`amd64` / `arm64`）并发布到 GHCR。
 > 若不想配置 CI，直接用「方式一 / 方式二」即可。
 
 ```bash
@@ -241,7 +244,7 @@ flowchart LR
 mkdir -p auths data && cp config.example.json config.json
 #    建议编辑 config.json 设置 api_key（或留空由程序自动生成随机密钥）
 
-# 2. 拉取并运行（镜像名按你的仓库替换）
+# 2. 拉取并运行
 docker run -d --name workbuddy2api \
   -p 7863:7863 -e TZ=Asia/Shanghai \
   -v ./auths:/app/auths -v ./data:/app/data -v ./config.json:/app/config.json \
@@ -253,6 +256,9 @@ curl -s http://localhost:7863/healthz
 
 > **首次发布后须将包设为公开**：GitHub 仓库页 → Packages → `workbuddy2api-imgen` →
 > Package settings → Change visibility → Public，否则拉取需要 `docker login ghcr.io`。
+>
+> 镜像 tag 规则：`main` 分支推送 `latest` / `main` / `sha-xxxxxx`；打 `v*` tag 额外发布
+> `1.2.3` / `1.2` / `1` 语义化版本；PR 仅构建验证、不推送。
 
 ### 方式一：Docker Compose（推荐服务器部署）
 
@@ -450,6 +456,40 @@ curl -s http://localhost:7863/v1/chat/completions \
 - 触发降级后持续到**次日 00:00 CST**（Asia/Shanghai）重置；降级期内 `passthrough` 请求直达中性提示词，不再先撞 400
 - 降级状态是**进程内存态**，重启清零
 - 内容问题非账号问题：`ErrContentBlocked` 不罚账号（无冷却 / 熔断 / 计错），由网关降级重试消化
+
+### 原生工具调用标记还原
+
+上游（DeepSeek 系）的工具调用原生语法不是 OpenAI 的 JSON `tool_calls`，而是一段带**全角竖线**（U+FF5C）分隔符的标记文本：
+
+```text
+<PIPE>DSML<PIPE> calls>
+<PIPE>DSML<PIPE> invoke name="exec_command">
+<PIPE>DSML<PIPE> parameter name="cmd" string="true">ls -la<PIPE>DSML<PIPE> parameter>
+</PIPE>DSML<PIPE> invoke>
+</PIPE>DSML<PIPE> calls>
+```
+
+（上面用 `<PIPE>` 占位，真实分隔符是两个全角竖线。）
+
+上游**只在请求声明了 `tools` 时**才把这段标记解析成结构化 `tool_calls`。一旦某次请求没带上 `tools`——实测这在链路上是常态（协议转换丢字段、一次性 `exec` 探测、auto-review 复核回合等）——模型仍然想调工具，于是标记以纯文本落进 `content`。下游没有任何一层认识它：Codex 只执行 Responses API 的结构化 `function_call` 条目，于是把它当普通助手正文写进会话历史，回合直接 `task_complete`、工具一次都没跑。
+
+网关在出站响应里做最后一道还原（`internal/upstream/dsml.go`），判定分两级：
+
+| 工具名单状态 | 判定 |
+|---|---|
+| 非空 | **严格**：块内每个工具名都必须在名单里 |
+| 为空（`tools` 丢失，实测常态） | **弱**：块必须完美闭合，且工具名形如合法标识符（`^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,63}$`） |
+
+名单有两个来源，二者会分别缺失，所以都要：**本请求声明的工具**（`tools[].function.name` / `tools[].name` / `functions[].name`）与**会话历史里出现过的工具名**（`messages[].tool_calls[].function.name`）。
+
+还原还受三条硬性前提约束：本回合上游没有给出任何结构化 `tool_calls`（不覆盖真实调用）、块内除 invoke/parameter 与空白外不夹带正文、非流式额外要求 `finish_reason` 为 `stop`。**任何一条不满足即原文逐字节透出**——未闭合、参数畸形、超长（>256KB）一律回吐，修复层绝不吞字节。
+
+命中与否各记一行日志，便于排障时区分「没识别到」与「识别到但判定不通过」：
+
+```text
+INFO: [server] stream ...: repaired N native tool call(s) from assistant text (tool names known=K)
+WARN: [server] stream ...: saw M native tool call block(s) but repaired none (tool names known=K)
+```
 
 ### 错误分类与账号处置
 
@@ -684,6 +724,7 @@ http://127.0.0.1:7863/panel/
 - 出站请求强制 `stream:true`；SSE 帧按 OpenAI 规范**白名单重建**（`reasoning_content` 保留、工具调用按 index 合并、未知字段剥离）
 - 保证恰好一个 `data: [DONE]`（上游漏发时兜底补写）；空流先写一帧 `error` 再补 `[DONE]`
 - 非流式请求由本地聚合完整 SSE 流为单 `chat.completion` 响应（含 `reasoning_content` / `tool_calls`）
+- 正文里的原生工具调用标记在透传前还原为 `delta.tool_calls`（见「原生工具调用标记还原」）：命中时一帧会拆成「正文帧 + N 个调用帧 + 收尾帧」，上游的 `finish_reason: stop` 改写为 `tool_calls` 且排在调用帧之后；未命中时逐字节透传
 
 ### 上游端点
 

@@ -35,11 +35,6 @@ docs/
 *.md
 !README.md
 
-# 例外：代码用 go:embed 内嵌的 *.md 必须进版本库，否则构建失败
-# （internal/prompt/prompt.go 的 //go:embed defaultprompt.md；
-#  漏掉它时 Docker/CI 构建报 "pattern defaultprompt.md: no matching files found"）
-!internal/prompt/defaultprompt.md
-
 # Windows binaries
 /wb2api.exe
 /login.exe
