@@ -420,6 +420,7 @@ func (h *Handler) generationModelsFor(realm string) []upstream.ModelInfo {
 	}
 	infos, err := h.cfg.Upstream.FetchGenerationModels(acct)
 	if err != nil || len(infos) == 0 {
+		log.Printf("[images] generation model probe failed realm=%s: %v", realm, err)
 		generationModelsCache.Lock()
 		generationModelsCache.byRealm[realm] = &generationModelsEntry{lastFail: time.Now()}
 		generationModelsCache.Unlock()

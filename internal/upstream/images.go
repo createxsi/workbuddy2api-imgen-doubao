@@ -657,23 +657,34 @@ func IsGenerationModel(tags []string) bool {
 // 为什么不能复用 FetchModels：后者按 nonChatModel 规则把生成类模型剔除，所以
 // 生成类模型只能由本方法单独探测。二者互不影响——/v1/models 保持聊天目录整洁。
 //
-// UA 选择：**桌面端 UA**（defaultWorkBuddyUAFor）。实测（2026-10-09）该 UA 下发的
-// 目录最全（CN 域 55 条 vs IDE UA 21 条），而本方法只在客户端主动请求
-// /v1/images/models 时触发，不影响 /v1/models 的规模。
+// UA 选择：v3/config 对 UA 敏感且各 UA 下发的模型集合不同。CN 域桌面端 UA 目录最全
+// （2026-10-09 实测 55 条）；global 域桌面端 UA 现已不含生成类模型，只有 IDE UA 下发
+// （2026-10-21 实测）。故按 桌面端 → IDE → CLI 依次探测、取并集，任一路成功即可。
 //
 // 无号/网络错/目录里没有生成类模型 → 返回错误（调用方降级为静态兜底清单）。
 func (c *Client) FetchGenerationModels(a *auth.Auth) ([]ModelInfo, error) {
-	byID, err := c.fetchV3ConfigModelMap(a, c.defaultWorkBuddyUAFor(a))
-	if err != nil {
-		return nil, err
-	}
-	out := make([]ModelInfo, 0, 4)
-	for _, mi := range byID {
-		if IsGenerationModel(mi.Tags) {
-			out = append(out, mi)
+	byID := map[string]ModelInfo{}
+	var errs []string
+	for _, ua := range []string{c.defaultWorkBuddyUAFor(a), codeBuddyIDEUA, codeBuddyCLIUA} {
+		m, err := c.fetchV3ConfigModelMap(a, ua)
+		if err != nil {
+			errs = append(errs, err.Error())
+			continue
+		}
+		for id, mi := range m {
+			if _, seen := byID[id]; !seen && IsGenerationModel(mi.Tags) {
+				byID[id] = mi
+			}
 		}
 	}
+	out := make([]ModelInfo, 0, len(byID))
+	for _, mi := range byID {
+		out = append(out, mi)
+	}
 	if len(out) == 0 {
+		if len(errs) > 0 {
+			return nil, fmt.Errorf("no generation model in v3/config directory: %s", strings.Join(errs, "; "))
+		}
 		return nil, fmt.Errorf("no generation model in v3/config directory")
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

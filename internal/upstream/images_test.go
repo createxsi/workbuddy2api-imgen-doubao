@@ -7,10 +7,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 )
 
 // decodeMap 把构造出的请求体解成 map 便于按字段断言。
@@ -530,5 +533,32 @@ func TestDataURLFromBytes(t *testing.T) {
 	// 扩展名不认识 → 回落 magic
 	if got := DataURLFromBytes(jpg, "weird.dat"); !strings.HasPrefix(got, "data:image/jpeg;base64,") {
 		t.Errorf("未知扩展名应回落 magic: %s", got)
+	}
+}
+
+// global 桌面端 UA 的 v3/config 不再下发生成类模型，只有 IDE UA 下发：探测须取多 UA 并集。
+func TestFetchGenerationModelsFallsBackAcrossUAs(t *testing.T) {
+	var uas []string
+	c := testClient(func(r *http.Request) (*http.Response, error) {
+		ua := r.Header.Get("User-Agent")
+		uas = append(uas, ua)
+		if ua == codeBuddyIDEUA {
+			return jsonResp(200, `{"code":0,"data":{"models":[
+				{"id":"gpt-image-2.5-sunburst","name":"GPT-Image-2.5-Sunburst","tags":["text-to-image","image-to-image"]},
+				{"id":"hy3","name":"HY3"}
+			]}}`), nil
+		}
+		return jsonResp(200, `{"code":0,"data":{"models":[{"id":"hy3","name":"HY3"}]}}`), nil
+	})
+	a := &auth.Auth{AccessToken: "at", UID: "u1", Domain: "www.workbuddy.ai"}
+	infos, err := c.FetchGenerationModels(a)
+	if err != nil {
+		t.Fatalf("FetchGenerationModels: %v", err)
+	}
+	if len(infos) != 1 || infos[0].ID != "gpt-image-2.5-sunburst" {
+		t.Fatalf("infos=%+v", infos)
+	}
+	if len(uas) < 2 {
+		t.Fatalf("expected multi-UA probe, got %v", uas)
 	}
 }
