@@ -179,7 +179,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 | **安全加固** | 常量时间密钥比较（`internal/httpauth`）、CSP 与安全响应头、UID 白名单防路径穿越、前端属性转义修复 |
 | **领养前置修复** | 上游 `travelAdopt` 缺 report 前置导致领养恒失败于 `first_buddy task not completed yet`；本分支修正后实测 +300 到账（3/3 账号） |
 | **Anthropic Messages / OpenAI Responses** | `POST /v1/messages`（及 `/messages`，支持 `x-api-key`）与 `POST /v1/responses` 转到同一条 chat 链路，选号/轮转/错误处置不变。支持流式、工具调用、思考块/推理摘要、图片；Responses 支持 `custom` 与 `namespace` 工具。不保存会话（`previous_response_id` 不生效），客户端需每轮带全量上下文 |
-| **联网检索** | `POST /v1/search`（`{"query","max_results","realm"}`）透传官方 `/agenttool/v1/search` 结果。`/v1/messages` 声明 `web_search_*` 服务端工具、`/v1/responses` 声明托管 `web_search` 时由网关执行检索：模型写检索词，网关检索后把结果回填再作答（单次请求最多 3 轮），并回报 `server_tool_use`/`web_search_tool_result` 或 `web_search_call`。声明了检索工具的请求首轮为内部非流式调用 |
+| **联网检索** | `POST /v1/search`（`{"query","max_results","realm","deep"}`）透传官方 `/agenttool/v1/search` 结果，`deep:true` 走综述式检索（`agentic_search`，耗时数十秒、消耗较大）；`POST /v1/webfetch`（`{"url"}`）返回网页正文。`/v1/messages` 声明 `web_search_*` 服务端工具、`/v1/responses` 声明托管 `web_search` 时由网关执行检索：模型写检索词，网关检索后把结果回填再作答（单次请求最多 3 轮），并回报 `server_tool_use`/`web_search_tool_result` 或 `web_search_call`。声明了检索工具的请求首轮为内部非流式调用 |
 | **OpenAI 兼容生图** | `POST /v1/images/generations`、`POST /v1/images/edits`、`GET /v1/images/models`。详见下方「🎨 生图能力」 |
 | **原生工具调用标记还原** | 上游（DeepSeek 系）的工具调用原生语法是带全角竖线的标记文本，**仅在请求声明了 `tools` 时**才被上游解析成结构化 `tool_calls`。实测 `tools` 声明在中转环节（Responses → chat/completions 等）丢失是常态，此时模型仍想调工具，标记就以纯文本落进 `content`——Codex 这类只执行结构化 `function_call` 的客户端会把它当普通正文写进会话历史，回合直接结束、工具一次都没跑。网关在出站响应里识别并还原成 `tool_calls`（流式与非流式都覆盖） |
 

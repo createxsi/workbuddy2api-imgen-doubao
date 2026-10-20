@@ -148,6 +148,7 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("GET /v1/responses", h.responsesWebsocket)
 	// 官方联网检索透传（search.go）。
 	h.mux.HandleFunc("POST /v1/search", h.withAuth(h.webSearch))
+	h.mux.HandleFunc("POST /v1/webfetch", h.withAuth(h.webFetch))
 	// 生图（OpenAI Images API 兼容）：转发到账号 realm 对应的上游
 	// /v2/images/generations（global = www.workbuddy.ai，即桌面版 WorkBuddyAI
 	// ImageGen 的同域端点）。选号/轮转/错误处置与 chat 同链路。
@@ -778,6 +779,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	convID := session.ResolveConversationID(body)
 	if convID == "" {
 		convID = sessKey
+	}
+	if convID == "" {
+		convID = session.DeriveCacheKey(body)
 	}
 	chatMeta := upstream.ChatMeta{ConversationID: convID}
 	if v := r.Header.Get("X-Conversation-Request-ID"); v != "" {

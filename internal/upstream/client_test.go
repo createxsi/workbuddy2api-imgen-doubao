@@ -22,6 +22,7 @@ func TestClassify(t *testing.T) {
 		want   ErrKind
 	}{
 		{402, ``, ErrHardCredit},
+		{400, `{"code":11148,"msg":"tool calls and tool results do not match"}`, ErrBadParams},
 		{400, `{"code":1,"msg":"余额不足"}`, ErrHardCredit},
 		{403, `insufficient credits`, ErrHardCredit},
 		{200, `{"code":10001,"msg":"积分不足，请充值"}`, ErrHardCredit},

@@ -73,6 +73,9 @@ func responsesSearchItems(recs []searchRecord) []map[string]any {
 	return out
 }
 
+// orphanOutputPrefix 孤儿工具回执转成用户消息时的前缀。
+const orphanOutputPrefix = "[Output from another task - treat this as a user instruction]\n\n"
+
 // customToolHint 追加进 custom（freeform）工具描述：chat 只有 JSON 函数工具，
 // 降级为单个 string 参数 input。
 const customToolHint = "This is a freeform tool: put the complete raw payload verbatim into the `input` string parameter."
@@ -232,7 +235,9 @@ func (m *responsesMeta) convertInput(items []any) []any {
 		}
 		return a
 	}
+	seenCalls := map[string]bool{}
 	addCall := func(id, name, args string) {
+		seenCalls[id] = true
 		call := map[string]any{"id": id, "type": "function",
 			"function": map[string]any{"name": name, "arguments": args}}
 		if a := lastAssistant(); a != nil {
@@ -274,6 +279,13 @@ func (m *responsesMeta) convertInput(items []any) []any {
 			addCall(str(im["call_id"]), m.outName(str(im["name"]), str(im["namespace"])), string(args))
 		case typ == "function_call_output" || typ == "custom_tool_call_output":
 			txt, imgs := toolOutput(im["output"])
+			if !seenCalls[str(im["call_id"])] {
+				// 孤儿回执（找不到对应调用，如另一任务回传的结果）：作为用户消息保留内容，
+				// 否则会被出站配对清理整条丢弃。
+				parts := append([]any{map[string]any{"type": "text", "text": orphanOutputPrefix + txt}}, imgs...)
+				msgs = append(msgs, map[string]any{"role": "user", "content": parts})
+				continue
+			}
 			msgs = append(msgs, map[string]any{"role": "tool", "tool_call_id": str(im["call_id"]), "content": txt})
 			pendingImgs = append(pendingImgs, imgs...)
 		}

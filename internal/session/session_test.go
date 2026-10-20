@@ -377,3 +377,15 @@ func TestExtractKeyMultimodalContent(t *testing.T) {
 		t.Error("pure-image url changes must keep same derived key")
 	}
 }
+
+func TestDeriveCacheKeyIgnoresUserIDGate(t *testing.T) {
+	a := []byte(`{"metadata":{"user_id":"u"},"messages":[{"role":"user","content":"对话A"}]}`)
+	b := []byte(`{"metadata":{"user_id":"u"},"messages":[{"role":"user","content":"对话B"}]}`)
+	if ExtractKey(a) != "" {
+		t.Fatal("ExtractKey must stay empty for user_id clients")
+	}
+	ka, kb := DeriveCacheKey(a), DeriveCacheKey(b)
+	if ka == "" || ka == kb || ka != DeriveCacheKey(a) {
+		t.Fatalf("ka=%q kb=%q", ka, kb)
+	}
+}

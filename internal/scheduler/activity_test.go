@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -584,9 +586,12 @@ func TestRunActivityNowGlobalErrorDoesNotSkipCN(t *testing.T) {
 // CN 专属签到端点。
 func TestCheckinStillSkipsGlobal(t *testing.T) {
 	withGlobalSwitch(t)
-	var hits atomic.Int32
+	var mu sync.Mutex
+	var paths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hits.Add(1)
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
 		w.Write([]byte(`{"code":0,"data":{}}`))
 	}))
 	defer srv.Close()
@@ -605,7 +610,19 @@ func TestCheckinStillSkipsGlobal(t *testing.T) {
 
 	s.RunCheckinNow()
 
-	if n := hits.Load(); n != 0 {
-		t.Errorf("checkin global 上游调用=%d want 0（签到仍应跳过 global）", n)
+	// 签到/成长域对 global 零调用；billing 域礼包/补偿允许（按 realm 路由到国际版 base）。
+	mu.Lock()
+	defer mu.Unlock()
+	var benefits int
+	for _, path := range paths {
+		switch {
+		case strings.Contains(path, "/billing/meter/claim-gift"), strings.Contains(path, "/billing/meter/claim-compensation"):
+			benefits++
+		default:
+			t.Errorf("global 不应发起签到/成长域调用: %s", path)
+		}
+	}
+	if benefits != 2 {
+		t.Errorf("global 礼包/补偿调用=%d want 2 (paths=%v)", benefits, paths)
 	}
 }

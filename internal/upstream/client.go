@@ -654,6 +654,11 @@ func Classify(status int, body string) ErrKind {
 		if strings.Contains(body, badParamsMarkerMsg) || strings.Contains(body, badParamsMarkerCode) {
 			return ErrBadParams
 		}
+		// 11148「tool calls and tool results do not match」：会话历史里工具调用与结果配对断裂，
+		// 同一 body 换任何账号都被同样拒绝——与 11101 同待遇（不罚号、不轮转、400 透传原文）。
+		if codeMarker(lower, "11148") || strings.Contains(lower, "tool results do not match") {
+			return ErrBadParams
+		}
 		return ErrClient
 	}
 	// HTTP 200 但业务 code 非 0 且含余额关键词的情况已被上面 hardMarkers 捕获。

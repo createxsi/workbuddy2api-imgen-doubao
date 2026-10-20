@@ -74,6 +74,8 @@ func newDialer() *net.Dialer {
 func newTransport() *http.Transport {
 	dialer := newDialer()
 	return &http.Transport{
+		// 遵循 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 环境变量（未设置时直连）。
+		Proxy:       http.ProxyFromEnvironment,
 		DialContext: dialer.DialContext,
 		// 空 TLSNextProto（非 nil）真正禁 h2：见函数注释。必须 make 而非 nil——
 		// nil 表示「让标准库注入默认 h2 映射」（kongjianguan 实测：设

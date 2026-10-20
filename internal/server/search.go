@@ -1,5 +1,5 @@
-// search.go 官方联网检索（upstream.Search）的两个出口：
-//   - POST /v1/search：检索原文透传；
+// search.go 官方 agenttool 联网能力的出口：
+//   - POST /v1/search：检索原文透传（deep=true 走综述式检索）；POST /v1/webfetch：网页正文；
 //   - /v1/messages 的 web_search 服务端工具、/v1/responses 的托管 web_search 工具：
 //     由网关执行检索，模型只负责写检索词与据结果作答。
 package server
@@ -13,7 +13,9 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
@@ -29,9 +31,18 @@ func (h *Handler) searchRealm(realm string) string {
 	return "cn"
 }
 
-// searchOnce 选号执行一次检索。请求级错误（4xx 业务错误）不罚号、不换号直接返回；
-// 账号类错误按 chat 同口径处置后换号；传输错误只换号。
+// agentToolCall 一次 agenttool 族出站调用。
+type agentToolCall func(ctx context.Context, a *auth.Auth) (json.RawMessage, error)
+
 func (h *Handler) searchOnce(ctx context.Context, realm, query string, maxResults int) (json.RawMessage, int, error) {
+	return h.agentToolOnce(ctx, realm, func(ctx context.Context, a *auth.Auth) (json.RawMessage, error) {
+		return h.cfg.Upstream.Search(ctx, a, query, maxResults)
+	})
+}
+
+// agentToolOnce 选号执行一次 agenttool 调用。请求级错误（4xx 业务错误）不罚号、不换号直接返回；
+// 账号类错误按 chat 同口径处置后换号；传输错误只换号。
+func (h *Handler) agentToolOnce(ctx context.Context, realm string, call agentToolCall) (json.RawMessage, int, error) {
 	tried := map[string]bool{}
 	var lastErr error
 	lastStatus := http.StatusServiceUnavailable
@@ -63,7 +74,7 @@ func (h *Handler) searchOnce(ctx context.Context, realm, query string, maxResult
 				log.Printf("ERR: [search] refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
 			}
 		}
-		raw, err := h.cfg.Upstream.Search(ctx, acct, query, maxResults)
+		raw, err := call(ctx, acct)
 		h.cfg.Pool.Release(acct.UID)
 		if err == nil {
 			return raw, http.StatusOK, nil
@@ -90,7 +101,11 @@ func (h *Handler) searchOnce(ctx context.Context, realm, query string, maxResult
 	return nil, lastStatus, lastErr
 }
 
-// webSearch POST /v1/search  {"query":"...","max_results":5,"realm":"cn|global"}
+// agenticSearchTimeout 综述式检索单次上限（实测数十秒）。
+const agenticSearchTimeout = 3 * time.Minute
+
+// webSearch POST /v1/search  {"query":"...","max_results":5,"realm":"cn|global","deep":false}
+// deep=true 走综述式检索（耗时数十秒、消耗较大），返回 done 帧原文。
 func (h *Handler) webSearch(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -101,17 +116,53 @@ func (h *Handler) webSearch(w http.ResponseWriter, r *http.Request) {
 		Query      string `json:"query"`
 		MaxResults int    `json:"max_results"`
 		Realm      string `json:"realm"`
+		Deep       bool   `json:"deep"`
 	}
 	if json.Unmarshal(body, &in) != nil || strings.TrimSpace(in.Query) == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "query is required")
 		return
 	}
-	raw, status, err := h.searchOnce(r.Context(), h.searchRealm(in.Realm), in.Query, in.MaxResults)
+	var raw json.RawMessage
+	var status int
+	if in.Deep {
+		ctx, cancel := context.WithTimeout(r.Context(), agenticSearchTimeout)
+		defer cancel()
+		raw, status, err = h.agentToolOnce(ctx, h.searchRealm(in.Realm), func(ctx context.Context, a *auth.Auth) (json.RawMessage, error) {
+			return h.cfg.Upstream.AgenticSearch(ctx, a, in.Query)
+		})
+	} else {
+		raw, status, err = h.searchOnce(r.Context(), h.searchRealm(in.Realm), in.Query, in.MaxResults)
+	}
+	writeAgentToolResult(w, raw, status, err)
+}
+
+// webFetch POST /v1/webfetch  {"url":"https://...","realm":"cn|global"}：网页正文（markdown）。
+func (h *Handler) webFetch(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
+		return
+	}
+	var in struct {
+		URL   string `json:"url"`
+		Realm string `json:"realm"`
+	}
+	if json.Unmarshal(body, &in) != nil || !(strings.HasPrefix(in.URL, "http://") || strings.HasPrefix(in.URL, "https://")) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "url (http/https) is required")
+		return
+	}
+	raw, status, err := h.agentToolOnce(r.Context(), h.searchRealm(in.Realm), func(ctx context.Context, a *auth.Auth) (json.RawMessage, error) {
+		return h.cfg.Upstream.WebFetch(ctx, a, in.URL)
+	})
+	writeAgentToolResult(w, raw, status, err)
+}
+
+func writeAgentToolResult(w http.ResponseWriter, raw json.RawMessage, status int, err error) {
 	if err != nil {
 		if status < 400 {
 			status = http.StatusBadGateway
 		}
-		writeOpenAIError(w, status, "search_failed", err.Error())
+		writeOpenAIError(w, status, "agenttool_failed", err.Error())
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")

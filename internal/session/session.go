@@ -389,6 +389,18 @@ const derivedKeyPrefix = "d-"
 //   - 同一会话多轮请求 → 同一键 → 稳定粘住同一账号（上游 prompt 缓存命中）。
 //
 // 取不到用户文本（纯图片等）时返回空串：不粘性，退回普通轮换（安全降级）。
+// DeriveCacheKey 与 ExtractKey 的内容派生键同源（system + 首条 user 哈希），但不设
+// user_id 闸。只用于上游前缀缓存槽 / 会话头：账号粘性仍只认 ExtractKey。
+// 否则只发 user_id 的客户端（如 Claude Code）会让每个账号只剩一个常量缓存槽，
+// 同账号上的多段对话交错时互相覆盖前缀缓存。
+func DeriveCacheKey(body []byte) string {
+	var obj map[string]any
+	if len(body) == 0 || json.Unmarshal(body, &obj) != nil {
+		return ""
+	}
+	return deriveKey(obj)
+}
+
 func deriveKey(obj map[string]any) string {
 	msgs, ok := obj["messages"].([]any)
 	if !ok || len(msgs) == 0 {

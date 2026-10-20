@@ -26,11 +26,14 @@ func (s *Scheduler) RunStreakBonusNow() {
 		if a == nil || a.AccessTokenValue() == "" {
 			continue
 		}
-		if a.IsGlobal() {
-			continue // D4 门控：global 无 CN 任务体系，不发起任何上游调用
-		}
 		if a.IsEnterprise() {
 			continue // 企业版门控：无成长体系（/activity/growth/streak 上游一律 403）
+		}
+		if a.IsGlobal() {
+			// global 无 CN 成长体系（连登/补签/兑换/抽奖），但 billing 域的礼包/补偿
+			// 按 realm 路由到国际版 base，同样可领。
+			s.claimBenefits(a)
+			continue
 		}
 		s.streakBonusAccount(a)
 	}
@@ -41,12 +44,7 @@ func (s *Scheduler) streakBonusAccount(a *auth.Auth) {
 	// 0. 补签保连登：昨日漏签且有补签卡则补上（连续天数一断就要重攒 7 天）。
 	s.makeupYesterday(a)
 	// 0.5 礼包/补偿（每号一次，无则业务错误静默跳过）。
-	if credit, err := s.cfg.Upstream.ClaimGift(a); err == nil {
-		log.Printf("streak-bonus %s: 🎊 新手礼包 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
-	}
-	if credit, err := s.cfg.Upstream.ClaimCompensation(a); err == nil {
-		log.Printf("streak-bonus %s: 🎊 补偿领取 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
-	}
+	s.claimBenefits(a)
 
 	full, err := s.cfg.Upstream.GrowthStreakFull(a)
 	if err != nil {
@@ -116,4 +114,14 @@ func (s *Scheduler) makeupYesterday(a *auth.Auth) {
 		return
 	}
 	log.Printf("streak-bonus %s: ★ 已用补签卡补签 %s（保连登）", logfmt.Label(a.UID, a.Nickname), yesterday)
+}
+
+// claimBenefits 礼包 / 活动补偿（billing 域，有则领，无则业务错误静默跳过）。
+func (s *Scheduler) claimBenefits(a *auth.Auth) {
+	if credit, err := s.cfg.Upstream.ClaimGift(a); err == nil {
+		log.Printf("streak-bonus %s: 🎊 新手礼包 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
+	}
+	if credit, err := s.cfg.Upstream.ClaimCompensation(a); err == nil {
+		log.Printf("streak-bonus %s: 🎊 补偿领取 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
+	}
 }

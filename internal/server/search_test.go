@@ -121,3 +121,65 @@ func TestMessagesWithoutSearchToolNoProbe(t *testing.T) {
 		t.Fatalf("code=%d chats=%d", rec.Code, len(bodies))
 	}
 }
+
+func agentToolFake(t *testing.T, path, ct, body string, gotPath *string) *Handler {
+	t.Helper()
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			*gotPath = r.URL.Path
+			if !strings.HasSuffix(r.URL.Path, path) {
+				return &http.Response{StatusCode: 404, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}"))}, nil
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {ct}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})},
+		ChatBaseCN:    "https://fake.example",
+		BillingBaseCN: "https://fake.example",
+	}
+	return NewHandler(Config{
+		Pool:     testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999}),
+		Upstream: up,
+	})
+}
+
+func TestSearchDeepUsesAgenticDoneFrame(t *testing.T) {
+	var got string
+	sse := "event: progress\r\ndata: {\"step\":1}\r\n\r\nevent: done\r\ndata: {\"synthesis\":{\"content\":\"综述\"},\"partial\":false}\r\n\r\n"
+	h := agentToolFake(t, "/agenttool/v1/agentic_search", "text/event-stream", sse, &got)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/search", strings.NewReader(`{"query":"q","deep":true}`)))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "综述") || strings.Contains(rec.Body.String(), "step") {
+		t.Fatalf("code=%d path=%s body=%s", rec.Code, got, rec.Body.String())
+	}
+}
+
+func TestWebFetchEndpoint(t *testing.T) {
+	var got string
+	h := agentToolFake(t, "/agenttool/v1/webfetch", "application/json", `{"url":"https://a.example","title":"T","content":"# hi"}`, &got)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/webfetch", strings.NewReader(`{"url":"https://a.example"}`)))
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "# hi") {
+		t.Fatalf("code=%d path=%s body=%s", rec.Code, got, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/webfetch", strings.NewReader(`{"url":"file:///etc/passwd"}`)))
+	if rec.Code != 400 {
+		t.Fatalf("non-http url code=%d", rec.Code)
+	}
+}
+
+func TestResponsesOrphanOutputBecomesUserMessage(t *testing.T) {
+	chat, _, err := responsesToChat([]byte(`{"model":"hy3","input":[
+	 {"role":"user","content":"hi"},
+	 {"type":"function_call_output","call_id":"lost","output":"结果X"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Messages []map[string]any `json:"messages"`
+	}
+	_ = json.Unmarshal(chat, &got)
+	last := got.Messages[len(got.Messages)-1]
+	if last["role"] != "user" || !strings.Contains(string(chat), "结果X") || strings.Contains(string(chat), `"role":"tool"`) {
+		t.Fatalf("messages=%v", got.Messages)
+	}
+}
