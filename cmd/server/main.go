@@ -452,9 +452,16 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, out, 0o600); err != nil {
-		return nil, fmt.Errorf("write config: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
+		// issue #226：单文件 bind mount（./config.json:/app/config.json）+ PUID 运行时，
+		// 容器内 /app 目录属镜像用户，不可写 → 无法创建同目录 tmp。挂载文件本身可写，
+		// 此时退回原地覆写（与下方 EBUSY 分支同口径），而不是让面板保存永远失败。
+		if !errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.EROFS) {
+			return nil, fmt.Errorf("write config: %w", err)
+		}
+		if werr := writeFileInPlace(path, out); werr != nil {
+			return nil, fmt.Errorf("write config (tmp %v; in-place fallback): %w", err, werr)
+		}
+	} else if err := os.Rename(tmp, path); err != nil {
 		// A single-file Docker bind mount cannot be renamed over its mount
 		// target (Linux returns EBUSY / "device or resource busy"). Keep the
 		// atomic path for regular files, but update the mounted file in place
@@ -570,6 +577,24 @@ func mergeConfigMaps(cur, incoming map[string]any) map[string]any {
 }
 
 // mergedJSON 把合并后的 map 序列化回 JSON（供 ParseConfig 校验）。
+// writeFileInPlace 原地覆写已存在的文件（O_TRUNC + Sync），供无法在同目录建 tmp
+// 的部署形态（单文件 bind mount + 非镜像用户运行）兜底。非原子：写入中途失败会
+// 留下截断文件，所以只在原子路径确实走不通时使用。
+func writeFileInPlace(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(data)
+	if werr == nil {
+		werr = f.Sync()
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	return werr
+}
+
 func mergedJSON(m map[string]any) []byte {
 	b, err := json.Marshal(m)
 	if err != nil {
