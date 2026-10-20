@@ -82,7 +82,7 @@ jobs:
           V="${V%-panel}"   # 文件名不带 -panel 后缀（wb2api-panel-v1.2.3-... 既有惯例）
           case "${{ matrix.goos }}" in
             windows)
-              NAME="wb2api-panel-v${V}-windows-amd64.zip"
+              NAME="wb2api-panel-doubao-windows-amd64.zip"
               zip -q "$NAME" wb2api.exe config.example.json README.md
               ;;
             *)
