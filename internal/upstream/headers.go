@@ -274,9 +274,15 @@ func (c *Client) injectConversationHeaders(req *http.Request, meta ChatMeta) {
 		convReqID = session.NewMessageID()
 	}
 	messageID := session.NewMessageID()
-	if meta.ConversationID != "" {
-		req.Header.Set("X-Conversation-ID", meta.ConversationID)
+	// 会话头三元组必须齐全：国际端点收紧通道校验后，缺 X-Conversation-ID 的
+	// 请求会直接 400 / 11128（conversation id missing）。入站没带会话 ID 时
+	// 本级补一个 32 hex（与 X-Conversation-Request-ID 的零值兜底同口径），
+	// 不再因为「透传优先」而漏发该头（issue #190）。
+	conversationID := meta.ConversationID
+	if conversationID == "" {
+		conversationID = session.NewMessageID()
 	}
+	req.Header.Set("X-Conversation-ID", conversationID)
 	req.Header.Set("X-Conversation-Request-ID", convReqID)
 	req.Header.Set("X-Conversation-Message-ID", messageID)
 	req.Header.Set("X-Request-ID", messageID)

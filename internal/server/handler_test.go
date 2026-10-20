@@ -495,6 +495,49 @@ func TestApplyErrorPolicyNotFoundUsesFixedBase(t *testing.T) {
 	}
 }
 
+// TestApplyErrorPolicyChannelRefusedDoesNotDisable 11128 与 11140 的 msg 同为
+// "request illegal"，但语义相反：
+//   - 11128 通道校验失败 → 账号健康（官方客户端可正常使用），不得禁用/冷却；
+//   - 11140 账号被上游限制 → 硬禁用，等用户在 WorkBuddy 申诉解除；
+//   - 11140 的模型级限流变体 → 仍是软限流，不能误禁用。
+//
+// 回归点：只看文案的旧实现会把 11128 判成账号封禁，硬禁用健康账号（issue 1849
+// 同款误伤：用户官方客户端能用，面板里却被标成 banned）。
+func TestApplyErrorPolicyChannelRefusedDoesNotDisable(t *testing.T) {
+	cases := []struct {
+		name         string
+		body         string
+		kind         upstream.ErrKind
+		wantDisabled bool
+		wantCooling  bool
+	}{
+		{"11128 channel refused", `{"code":11128,"msg":"request illegal","displayTips":{"en":"This call failed channel verification, possibly because it was not sent from an official client."}}`, upstream.ErrChannelRefused, false, false},
+		{"11140 account restricted", `{"code":11140,"msg":"request illegal"}`, upstream.ErrAccountFault, true, false},
+		{"11140 rate-limiting variant", `{"code":11140,"msg":"The model provider is rate-limiting requests."}`, upstream.ErrSoftRate, false, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := upstream.Classify(400, tc.body); got != tc.kind {
+				t.Fatalf("Classify=%v want %v", got, tc.kind)
+			}
+			p := pool.New("")
+			p.Add(&auth.Auth{UID: "u1"})
+			h := NewHandler(Config{Pool: p})
+			h.applyErrorPolicy("u1", tc.kind, tc.body, "glm-5.2", nil)
+			st, _ := p.Status("u1")
+			if st.Disabled != tc.wantDisabled {
+				t.Errorf("disabled=%v want %v (%+v)", st.Disabled, tc.wantDisabled, st)
+			}
+			if st.Cooling != tc.wantCooling {
+				t.Errorf("cooling=%v want %v (%+v)", st.Cooling, tc.wantCooling, st)
+			}
+			if !tc.wantDisabled && st.ErrTotal != 0 {
+				t.Errorf("不罚号路径不应累计错误计数: err_total=%d", st.ErrTotal)
+			}
+		})
+	}
+}
+
 // TestNewHandlerSoftCooldownDefault 端到端：未注入 SoftCooldown 时基数回落到 600s（原为 60s）。
 func TestNewHandlerSoftCooldownDefault(t *testing.T) {
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
