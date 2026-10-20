@@ -516,6 +516,7 @@ func (rw *responsesWriter) start(id string) error {
 		return nil
 	}
 	rw.started = true
+	rw.bw.live = true
 	rw.id = respID(id)
 	rw.created = time.Now().Unix()
 	h := rw.w.Header()

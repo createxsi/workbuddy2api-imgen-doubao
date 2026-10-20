@@ -521,6 +521,7 @@ func (m *messagesWriter) start(id string) error {
 		return nil
 	}
 	m.started = true
+	m.bw.live = true
 	m.id = anthropicMsgID(id)
 	h := m.w.Header()
 	h.Set("Content-Type", "text/event-stream")
@@ -703,6 +704,7 @@ func (m *messagesWriter) fail(msg string) error {
 	}
 	if !m.started {
 		m.started = true
+		m.bw.live = true
 		m.w.Header().Set("Content-Type", "text/event-stream")
 		m.w.WriteHeader(http.StatusOK)
 	}

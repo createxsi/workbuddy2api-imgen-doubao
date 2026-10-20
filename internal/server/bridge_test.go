@@ -290,3 +290,38 @@ func TestResponsesWebsocketRejected(t *testing.T) {
 		t.Fatalf("code=%d", rec.Code)
 	}
 }
+
+// commitWriter 模拟 net/http：Write/Flush 隐式提交 200，提交后再 WriteHeader 计为重复。
+type commitWriter struct {
+	*httptest.ResponseRecorder
+	committed   bool
+	superfluous int
+}
+
+func (c *commitWriter) WriteHeader(code int) {
+	if c.committed {
+		c.superfluous++
+		return
+	}
+	c.committed = true
+	c.ResponseRecorder.WriteHeader(code)
+}
+func (c *commitWriter) Write(p []byte) (int, error) { c.committed = true; return c.ResponseRecorder.Write(p) }
+func (c *commitWriter) Flush()                      { c.committed = true; c.ResponseRecorder.Flush() }
+
+func TestBridgeStreamNoSuperfluousWriteHeader(t *testing.T) {
+	roleOnly := "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"}}]}\n\n"
+	for _, up := range []string{roleOnly + sseToolTurn, "data: [DONE]\n\n", roleOnly + "data: [DONE]\n\n"} {
+		for _, tc := range []struct{ path, body string }{
+			{"/v1/messages", `{"model":"hy3","stream":true,"max_tokens":10,"messages":[{"role":"user","content":"hi"}]}`},
+			{"/v1/responses", `{"model":"hy3","stream":true,"input":"hi"}`},
+		} {
+			h := bridgeHandler(t, 200, up, true)
+			cw := &commitWriter{ResponseRecorder: httptest.NewRecorder()}
+			h.ServeHTTP(cw, httptest.NewRequest("POST", tc.path, strings.NewReader(tc.body)))
+			if cw.superfluous != 0 {
+				t.Errorf("%s upstream=%q: superfluous WriteHeader=%d code=%d", tc.path, up[:20], cw.superfluous, cw.Code)
+			}
+		}
+	}
+}

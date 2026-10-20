@@ -23,12 +23,18 @@ type bridgeWriter struct {
 	body   []byte
 	onData func(payload string) error
 	err    error
+	// live 翻译侧已开始写出（start/fail 之后）。此前 chatCompletions 的 Flush 不能
+	// 透传到真实连接：那会隐式提交 200，翻译侧随后的 WriteHeader 即成重复调用。
+	live bool
 }
 
 func (b *bridgeWriter) Header() http.Header  { return b.rw.Header() }
 func (b *bridgeWriter) WriteHeader(code int) { b.status = code }
 
 func (b *bridgeWriter) Flush() {
+	if !b.live {
+		return
+	}
 	if f, ok := b.rw.(http.Flusher); ok {
 		f.Flush()
 	}
