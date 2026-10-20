@@ -334,6 +334,7 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 					out = append(out, panelModelEntry("cn", mi, mi.Efforts, mi.DefaultEffort, p.cfg.Upstream.HTTP))
 				}
 			}
+			out = append(out, p.generationEntries("cn", acct)...)
 		}
 	}
 
@@ -351,6 +352,7 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 						out = append(out, panelModelEntry("global", mi, efforts[mi.ID], defaults[mi.ID], p.cfg.Upstream.HTTP))
 					}
 				}
+				out = append(out, p.generationEntries("global", acct)...)
 			}
 		}
 	}
@@ -364,6 +366,41 @@ func (p *Panel) models(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "models": out})
+}
+
+// generationEntries 该域的图片生成模型（与对话模型分开标注）：generation_model=true，
+// endpoints 给出应调用的生图端点。探测失败不影响对话模型列表。
+func (p *Panel) generationEntries(realm string, acct *auth.Auth) []map[string]any {
+	infos, err := p.cfg.Upstream.FetchGenerationModels(acct)
+	if err != nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(infos))
+	for _, mi := range infos {
+		var eps []string
+		for _, t := range mi.Tags {
+			switch t {
+			case "text-to-image":
+				eps = append(eps, "POST /v1/images/generations")
+			case "image-to-image":
+				eps = append(eps, "POST /v1/images/edits")
+			}
+		}
+		if len(eps) == 0 {
+			continue // 只列图片生成模型；视频等暂无网关端点
+		}
+		out = append(out, map[string]any{
+			"id":               realm + ":" + mi.ID,
+			"name":             mi.Name,
+			"credits":          mi.Credits,
+			"description":      mi.Description,
+			"tags":             mi.Tags,
+			"vendor":           mi.Vendor,
+			"generation_model": true,
+			"endpoints":        eps,
+		})
+	}
+	return out
 }
 
 // panelModelEntry 构造单个模型条目（两域共用）：id 带 realm 前缀（调用值即显示值），

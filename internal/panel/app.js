@@ -678,7 +678,8 @@ async function loadModels() {
     const probeKeys = Object.keys(mdProbes);
     mdProbeOf = id => mdProbes[id] || mdProbes[probeKeys.find(k => k.endsWith(':' + id))];
     const hit = mdAll.filter(m => mdProbeOf(m.id)).length;
-    $('mdNote').textContent = mdAll.length + ' 个模型 · 已刷新降级缓存' + (hit ? ' · ' + hit + ' 个有实测上限' : '');
+    const gen = mdAll.filter(m => m.generation_model).length;
+    $('mdNote').textContent = mdAll.length + ' 个模型' + (gen ? '（含 ' + gen + ' 个生图模型）' : '') + ' · 已刷新降级缓存' + (hit ? ' · ' + hit + ' 个有实测上限' : '');
     renderModels();
   } catch (e) {
     mdAll = [];
@@ -716,6 +717,8 @@ function mdMatch(m, f) {
     }
   }
   if (f.realm && !String(m.id || '').startsWith(f.realm + ':')) return false;
+  if (f.cap === 'gen' && !m.generation_model) return false;
+  if (f.cap === 'chat' && m.generation_model) return false;
   if (f.cap === 'tool' && !m.supports_tool_call) return false;
   if (f.cap === 'vision' && !m.supports_images) return false;
   if (f.cap === 'reasoning' && !m.supports_reasoning) return false;
@@ -744,8 +747,25 @@ function mdSortList(list, f) {
   return out;
 }
 
+// mdGenRowHtml 图片生成模型行：不走 /v1/chat/completions，档位/上下文列改为端点提示。
+function mdGenRowHtml(m) {
+  const tags = m.tags || [];
+  const caps = ['<span class="tag ok">生图</span>'];
+  if (tags.includes('text-to-image')) caps.push('<span class="tag warn">文生图</span>');
+  if (tags.includes('image-to-image')) caps.push('<span class="tag warn">图生图</span>');
+  const tip = m.description ? ' title="' + esc(m.description) + '"' : '';
+  const eps = (m.endpoints || []).map(e => '<code>' + esc(e) + '</code>').join('<br>');
+  return '<tr><td class="mark" aria-hidden="true"><i></i></td><td class="who"' + tip + '><div class="nm">' + esc(m.id) + '</div><div class="id">' + esc(m.name || '') + '</div>' +
+    '<div class="id" style="margin-top:2px">' + caps.join(' ') + '</div></td>' +
+    '<td class="num">' + rateCell(m) + '</td>' +
+    '<td><span style="color:var(--ink-3)">—</span></td>' +
+    '<td class="efs" style="white-space:normal;font-size:12.5px"><span style="color:var(--ink-3)">非对话模型，请调用</span><br>' + eps + '</td>' +
+    '<td class="num">—</td><td class="num">—</td></tr>';
+}
+
 // mdRowHtml 单个模型行（纯渲染，便于独立测试）。
 function mdRowHtml(m, pr) {
+  if (m.generation_model) return mdGenRowHtml(m);
   const eff = (m.supported_efforts || []).slice();
   if (m.can_disable_thinking && eff.length && !eff.includes('off')) eff.push('off（可关）');
   const effs = eff.length ? eff.map(e => '<span class="tag warn">' + esc(e) + '</span>').join(' ')

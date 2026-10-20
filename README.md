@@ -4,6 +4,8 @@
 > （上游源头为 `Sliverkiss/workbuddy2api`，套娃派生🤣）
 >
 > 在原网关之上叠加 **OpenAI 兼容生图能力**（文生图 / 图生图 / 生成类模型清单），详见「🎨 生图能力」。
+> 对于没有生图插件的客户端，可以对 agent 说：「帮我生成并配置一个生图 MCP：`wb_imagegen`，放在 `%USERPROFILE%\tool`，`base_url = http://127.0.0.1:7863/v1`，`Authorization: Bearer 你的令牌`」。
+> <sub>（可在此基础上微调，加入图片编辑等功能；保存路径也可以让 AI 配置。图片默认不在聊天窗口展示，可让 agent 配置显示，但注意图片很容易把上下文撑爆。）</sub>
 > 其余部分与上游保持一致，并保留 `upstream` remote 以便跟随更新。
 >
 > 注：Go module 名沿用 `github.com/linguo2625469/workbuddy2api-panel`（不改 import 路径），
@@ -957,9 +959,9 @@ sudo chown -R 10001:10001 ./auths ./data ./config.json
 
 ### 怎么知道有哪些图片模型可用？
 
-**Web 面板和 `/v1/models` 里看不到生图模型，这是正常的**——它们被 `nonChatModel` 规则从聊天目录里剔除了（因为当对话模型发到 `/chat/completions` 会被上游拒绝，实测 `code=11103 "Backend [maas] is not supported"`）。
+**Web 面板「模型」页会列出生图模型**，带「生图」标签并注明应调用的端点（可用「生图模型 / 对话模型」筛选）。**`/v1/models` 仍不含生图模型**——它们被 `nonChatModel` 规则从聊天目录里剔除（当对话模型发到 `/chat/completions` 会被上游拒绝，实测 `code=11103 "Backend [maas] is not supported"`），避免客户端误当对话模型调用。
 
-要列出可用的生图模型，用独立端点：
+要通过 API 列出可用的生图模型，用独立端点：
 
 ```bash
 curl http://127.0.0.1:7863/v1/images/models -H "Authorization: Bearer $API_KEY"
