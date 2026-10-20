@@ -284,6 +284,7 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .rate-limit.model-unavailable { border-color: var(--line); background: var(--surface-2); color: var(--ink-3); }
 .rate-limit b { color: var(--ink); font-family: var(--mono); font-weight: 600; }
 .rate-limit span { color: var(--ink-2); }
+.rate-limit .ml-unlock { margin-left: auto; padding: 0 6px; font-size: 11px; line-height: 1.6; }
 .acts { display: flex; gap: 5px; justify-content: flex-end; white-space: nowrap; }
 .acts button { padding: 3.5px 8px; font-size: 12.5px; white-space: nowrap; flex: none; }
 
@@ -689,12 +690,13 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <h3>模型锁池 <span class="hint">哪些模型不能用、还要锁多久</span></h3>
           <span class="grow"></span>
           <span class="note" id="mlNote"></span>
+          <button class="xs" id="btnUnlockAll" hidden title="清除全部模型级冷却，账号级冷却与熔断不动">全部解锁</button>
         </header>
         <div class="tbl-wrap">
         <table class="acc">
           <thead><tr>
             <th>模型</th><th>域</th><th>状态</th><th>可选 / 总数</th>
-            <th>锁定账号</th><th>最早解锁</th><th>全池解锁</th><th>原因</th>
+            <th>锁定账号</th><th>最早解锁</th><th>全池解锁</th><th>原因</th><th></th>
           </tr></thead>
           <tbody id="mlBody"></tbody>
         </table>

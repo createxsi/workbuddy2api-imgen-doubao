@@ -153,3 +153,51 @@ func (p *Pool) ModelLockView() []ModelLockRow {
 	})
 	return out
 }
+
+// UnlockModels 人工打开模型锁池：清除 (账号, 模型) 级冷却，让被单独判定为限流 /
+// 繁忙 / 不可用的模型立刻重新参与选号。
+//
+// 为什么需要它：模型级冷却按上游信号自动计时（14003 60s 起、无重置时间的 6004
+// 按 soft_rate 阶梯 600s→2h、11102 负缓存 6h→24h）。上游的「繁忙」常常只是一瞬，
+// 但网关这边会把模型锁上很久——运维明知已恢复却只能干等，或者用「解冻」把整号
+// 的账号级状态一并清掉。本方法只动模型级台账，账号级冷却 / 熔断 / 禁用一律不碰。
+//
+// 过滤条件（空串 = 不限）：
+//   - model：只清该模型；空 = 清所选账号的全部模型级冷却；
+//   - realm：只清该域（cn | global）账号；
+//   - uid  ：只清该账号。
+//
+// 清除的是整条记录（含 Hits），之后若上游再次限流，退避从头计起——人工判断「已经
+// 好了」时不该继承之前的惩罚阶梯。返回被清除的 (账号, 模型) 条目数。
+func (p *Pool) UnlockModels(model, realm, uid string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for id, e := range p.byUID {
+		if uid != "" && id != uid {
+			continue
+		}
+		if realm != "" && e.a.Realm() != realm {
+			continue
+		}
+		if len(e.modelCooldowns) == 0 {
+			continue
+		}
+		if model == "" {
+			n += len(e.modelCooldowns)
+			e.modelCooldowns = nil
+			continue
+		}
+		if _, ok := e.modelCooldowns[model]; ok {
+			delete(e.modelCooldowns, model)
+			n++
+			if len(e.modelCooldowns) == 0 {
+				e.modelCooldowns = nil
+			}
+		}
+	}
+	if n > 0 {
+		p.dirty.Store(true)
+	}
+	return n
+}

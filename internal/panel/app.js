@@ -277,13 +277,16 @@ function rateLimitMeta(row, now) {
   }
   return { model, kind, detail, title: title.join('\n') };
 }
-function rateLimitRowsHtml(rows, now) {
+function rateLimitRowsHtml(rows, now, uid) {
   const list = Array.isArray(rows) ? rows.filter(row => row && row.model) : [];
   if (!list.length) return '';
   return '<div class="rate-limits">' + list.map(row => {
     const m = rateLimitMeta(row, now);
+    // 手动解锁（仅清该账号上的该模型级冷却；账号级冷却/熔断不动）。
+    const unlock = uid ? '<button class="xs ghost ml-unlock" data-a="unlock-model" data-u="' + esc(uid) +
+      '" data-m="' + esc(row.model) + '" title="手动解锁：立刻让该账号重新服务 ' + esc(row.model) + '">解锁</button>' : '';
     return '<div class="rate-limit ' + (m.kind === 'model_unavailable' ? 'model-unavailable' : '') +
-      '" title="' + esc(m.title) + '"><b>' + esc(m.model) + '</b><span>' + esc(m.detail) + '</span></div>';
+      '" title="' + esc(m.title) + '"><b>' + esc(m.model) + '</b><span>' + esc(m.detail) + '</span>' + unlock + '</div>';
   }).join('') + '</div>';
 }
 
@@ -397,7 +400,7 @@ function renderAccounts(list) {
       tag = '<span class="tag warn">' + kind + ' · ' + dur(cool) + '</span>';
     } else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
     const note = s.reason ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' + esc(s.reason) + '</div>' : '';
-    const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now());
+    const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now(), s.uid);
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
     // 企业版不限量：上游 limitNum == -1，网关以 credits_total=-1 透出（见 upstream
     // enterpriseUnlimitedTotal）。此时剩余额度不参与展示，直接标「不限」。
@@ -468,8 +471,9 @@ function renderModelLocks(rows) {
   if (!tb) return;
   const note = $('mlNote');
   if (!rows || !rows.length) {
-    tb.innerHTML = '<tr><td colspan="8"><div class="empty">当前没有模型级限流 —— 所有模型均可选</div></td></tr>';
+    tb.innerHTML = '<tr><td colspan="9"><div class="empty">当前没有模型级限流 —— 所有模型均可选</div></td></tr>';
     if (note) note.textContent = '';
+    if ($('btnUnlockAll')) $('btnUnlockAll').hidden = true;
     return;
   }
   const STATE = { locked: ['bad', '整池不可用'], starved: ['warn', '没号可用'], partial: ['warn', '部分限流'] };
@@ -489,8 +493,11 @@ function renderModelLocks(rows) {
       '<td class="num">' + left(r.unlock_at || r.fully_unlock_at) + '</td>' +
       '<td class="num">' + left(r.fully_unlock_at) + '</td>' +
       '<td>' + (r.reason ? '<div class="note">' + esc(r.reason) + '</div>' : '—') + '</td>' +
+      '<td class="acts"><button class="xs primary" data-a="unlock" data-m="' + esc(r.model) + '" data-r="' + esc(r.realm || '') +
+        '" title="手动打开：清除该模型在本域所有账号上的模型级冷却，立刻重新参与选号">解锁</button></td>' +
       '</tr>';
   }).join('');
+  if ($('btnUnlockAll')) $('btnUnlockAll').hidden = false;
   if (note) {
     const bad = rows.filter(r => r.state === 'locked' || r.state === 'starved').length;
     note.textContent = bad ? bad + ' 个模型整池不可用' : rows.length + ' 个模型部分限流';
@@ -542,6 +549,9 @@ $('accBody').addEventListener('click', async ev => {
     } else if (a === 'balance') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/balance', { method: 'POST' });
       toast('余额已更新：' + r.credits + (r.credits_total > 0 ? ' / ' + r.credits_total : ''), 'ok');
+    } else if (a === 'unlock-model') {
+      const r = await api('model_locks/unlock', { method: 'POST', body: JSON.stringify({ model: b.dataset.m, uid: u }) });
+      toast(r.cleared ? '已解锁 ' + b.dataset.m : '该模型已不在冷却中', 'ok');
     } else if (a === 'revive') {
       await api('accounts/' + encodeURIComponent(u) + '/revive', { method: 'POST' });
       toast('已解冻', 'ok');
@@ -563,6 +573,25 @@ $('accBody').addEventListener('click', async ev => {
   } catch (e) { toast(e.message, 'err'); }
   finally { b.disabled = false; loadOverview(true); }
 });
+
+// 模型锁池手动解锁：单行（模型+域）与全部。
+async function unlockModels(body, label) {
+  try {
+    const r = await api('model_locks/unlock', { method: 'POST', body: JSON.stringify(body) });
+    toast(r.cleared ? label + '：已解锁 ' + r.cleared + ' 处' : '没有需要解锁的模型冷却', 'ok');
+  } catch (e) { toast(e.message, 'err'); }
+  finally { loadOverview(true); }
+}
+if ($('mlBody')) $('mlBody').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-a="unlock"]');
+  if (!b) return;
+  b.disabled = true;
+  unlockModels({ model: b.dataset.m, realm: b.dataset.r }, b.dataset.m);
+});
+if ($('btnUnlockAll')) $('btnUnlockAll').onclick = () => {
+  if (!confirm('清除全部模型级冷却（14003 繁忙 / 6004 限流 / 11102 不可用）？账号级冷却与熔断不受影响。')) return;
+  unlockModels({}, '全部模型');
+};
 
 $('btnCheckinAll').onclick = async () => {
   try { await api('checkin_all', { method: 'POST' }); toast('全部签到已开始，结果见日志', 'ok'); }

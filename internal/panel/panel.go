@@ -12,6 +12,7 @@ package panel
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -159,6 +160,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("GET /panel/api/login/regions", p.withAuth(p.loginRegions))
 	p.mux.HandleFunc("POST /panel/api/import/cockpit", p.withAuth(p.importCockpit))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/revive", p.withAuth(p.accountRevive))
+	p.mux.HandleFunc("POST /panel/api/model_locks/unlock", p.withAuth(p.modelLocksUnlock))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/disable", p.withAuth(p.accountDisable))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/pause", p.withAuth(p.accountPause))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuth(p.accountResume))
@@ -468,6 +470,44 @@ func (p *Panel) accountRevive(w http.ResponseWriter, r *http.Request) {
 	p.cfg.Pool.Revive(uid)
 	log.Printf("panel: revive uid=%s（人工清除禁用/冷却/熔断）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// modelLocksUnlock 人工打开模型锁池：清除 (账号, 模型) 级冷却（14003 繁忙 / 6004 限流 /
+// 11102 负缓存），让被单独判定为限流的模型立刻回到选号。账号级冷却、熔断、禁用不动。
+//
+// body（全部可选，空 = 不限）：{"model":"hy3","realm":"cn","uid":"..."}
+//   - 只给 model         → 全池解锁该模型（锁池表的「解锁」按钮）；
+//   - model + realm      → 只解该域；
+//   - model + uid        → 只解该账号上的该模型（账号行限流条的「解锁」）；
+//   - 全空               → 全部模型级冷却一次清空（「全部解锁」）。
+func (p *Panel) modelLocksUnlock(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Model string `json:"model"`
+		Realm string `json:"realm"`
+		UID   string `json:"uid"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&body); err != nil && err != io.EOF {
+			writeErr(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+	}
+	body.Model = strings.TrimSpace(body.Model)
+	body.Realm = strings.TrimSpace(body.Realm)
+	body.UID = strings.TrimSpace(body.UID)
+	if body.Realm != "" && body.Realm != "cn" && body.Realm != "global" {
+		writeErr(w, http.StatusBadRequest, "realm must be cn or global")
+		return
+	}
+	if body.UID != "" {
+		if _, ok := p.cfg.Pool.Status(body.UID); !ok {
+			writeErr(w, http.StatusNotFound, "account not found")
+			return
+		}
+	}
+	n := p.cfg.Pool.UnlockModels(body.Model, body.Realm, body.UID)
+	log.Printf("panel: model unlock model=%q realm=%q uid=%q cleared=%d（人工打开模型锁池）", body.Model, body.Realm, body.UID, n)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "cleared": n})
 }
 
 // accountDisable 人工禁用（不再参与选号，需面板 revive 或重登恢复）。
