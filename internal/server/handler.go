@@ -141,6 +141,13 @@ func NewHandler(cfg Config) *Handler {
 	}
 	h := &Handler{cfg: cfg, mux: http.NewServeMux()}
 	h.mux.HandleFunc("POST /v1/chat/completions", h.withAuth(h.chatCompletions))
+	// 协议桥：Anthropic Messages / OpenAI Responses → 同一条 chat 链路（bridge.go）。
+	h.mux.HandleFunc("POST /v1/messages", h.withAnthropicAuth(h.messages))
+	h.mux.HandleFunc("POST /messages", h.withAnthropicAuth(h.messages))
+	h.mux.HandleFunc("POST /v1/responses", h.withAuth(h.responses))
+	h.mux.HandleFunc("GET /v1/responses", h.responsesWebsocket)
+	// 官方联网检索透传（search.go）。
+	h.mux.HandleFunc("POST /v1/search", h.withAuth(h.webSearch))
 	// 生图（OpenAI Images API 兼容）：转发到账号 realm 对应的上游
 	// /v2/images/generations（global = www.workbuddy.ai，即桌面版 WorkBuddyAI
 	// ImageGen 的同域端点）。选号/轮转/错误处置与 chat 同链路。
@@ -160,7 +167,7 @@ func NewHandler(cfg Config) *Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if h.cfg.RequestLog != nil && r.Method == http.MethodPost && r.URL.Path == "/v1/chat/completions" {
+	if h.cfg.RequestLog != nil && r.Method == http.MethodPost && isChatPath(r.URL.Path) {
 		trace := &requestTrace{id: reqlog.NewRequestID(), start: time.Now()}
 		if h.loadLive().RecordClientInfo {
 			trace.captureClientInfo(r)
@@ -180,6 +187,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// isChatPath 走 chat 链路、需要请求日志的入口（含协议桥）。
+func isChatPath(p string) bool {
+	switch p {
+	case "/v1/chat/completions", "/v1/messages", "/messages", "/v1/responses":
+		return true
+	}
+	return false
 }
 
 func (h *Handler) withAuth(next http.HandlerFunc) http.HandlerFunc {
