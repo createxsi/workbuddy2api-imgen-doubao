@@ -42,15 +42,15 @@ var cnEffortFallback = map[string]effortCap{
 }
 
 // globalEffortFallback global / WorkBuddy 国际版面静态兜底表。
-// 注意 deepseek-v4.1-flash 在国际版**只有 ['high']**（product.ts:190 实测 IDE 缓存），
-// 与 CN 面的三档刻意不同——往 WorkBuddy 上游发 low/max 是非法参数 400。
+// deepseek-v4.1-flash 国际版早期仅认 ['high']（发 low/max 返 400）；现上游已放开，
+// 实测 low/high/max 均 200 且 max 思考量明显高于 high，故与 CN 面一致为三档。
 var globalEffortFallback = map[string]effortCap{
 	"fast-model":          {efforts: []string{"medium"}},
 	"balanced-model":      {efforts: []string{"medium"}},
 	"primary-model":       {efforts: []string{"high"}},
 	"hy4-preview-f":       {efforts: []string{"high"}, defaultEffort: "high"},
 	"hy3":                 {efforts: []string{"low", "high"}, defaultEffort: "high"},
-	"deepseek-v4.1-flash": {efforts: []string{"high"}},
+	"deepseek-v4.1-flash": {efforts: []string{"low", "high", "max"}, defaultEffort: "high"},
 	"gpt-6-astra":         {efforts: []string{"low", "medium", "high", "xhigh", "max"}, defaultEffort: "high"},
 	"gpt-5.6-sol":         {efforts: []string{"low", "medium", "high", "xhigh", "max"}, defaultEffort: "high"},
 	"gpt-5.6-terra":       {efforts: []string{"low", "medium", "high", "xhigh", "max"}, defaultEffort: "high"},
@@ -116,8 +116,7 @@ func containsEffort(efforts []string, want string) bool {
 // globalEffortMap global 域降级用的 effort 能力表：静态兜底表为基，远端桶覆盖（权威优先）。
 //
 // prepareBody 对 global 请求调此函数（而非直接用远端桶），因为 global 上游可能不下发
-// supportedEfforts——此时也必须按产品静态表降级（issue #84：deepseek-v4.1-flash 国际版
-// 只认 high，客户端传 low/max 必降级到 high，否则上游 400 毁掉请求）。
+// supportedEfforts——此时也必须按产品静态表降级（issue #84：不支持的档位发往上游会 400）。
 // 语义对齐参考仓库 effortsFor（remoteMeta → productFallback → 静态表），只取前两级：
 // 远端桶（探测已解析）→ 本产品静态表（本文件），缺档位即无（不再到通用静态表）。
 func globalEffortMap(remoteEfforts map[string][]string, remoteDefaults map[string]string) (map[string][]string, map[string]string) {
