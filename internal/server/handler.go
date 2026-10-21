@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"sync"
@@ -1196,6 +1198,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// upstreamMsgPassed 记录 error.message 是否已被上游原文占据：模型级阻塞分支
 	// 据此决定要不要覆盖 msg（上游原文优先，含 requestId）。
 	upstreamMsgPassed := false
+	// retryAfterSec 非 0 时写 Retry-After 头：只有「全池该模型只是忙/被限流」
+	// 这种可重试形态才有意义（见下方 modelBlock 分支）。
+	retryAfterSec := 0
 	var ue *upstream.Error
 	if errors.As(lastErr, &ue) {
 		hint = h.hintOf(ue.Kind, ue.Msg, bareModel, reqHasImage, ue)
@@ -1234,7 +1239,28 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	//
 	// 用 400 而非 503：这是"你选的这个模型当前不可用"，不是"服务端暂时过载"。
 	// 换号重试必然同样失败，客户端不该按可重试错误处理。
-	if modelBlock.Blocked {
+	//
+	// 例外：冷却原因是瞬时的「忙 / 被限流」（14003 模型繁忙、6004 模型限流）时，
+	// 号本身活着、等一下就能用，回 400 会被客户端读成「模型不可用、重试无意义」。
+	// 这种形态改回可重试语义：503 + Retry-After（最早解封时刻）+ code=model_busy。
+	if modelBlock.Blocked && modelBlockIsTransient(modelBlock.Reason) {
+		code = "model_busy"
+		status = http.StatusServiceUnavailable
+		if !upstreamMsgPassed {
+			msg = "model is temporarily busy on every account (per-model cooldown); retry after the cooldown window"
+		}
+		hint = fmt.Sprintf("model_busy: %d account(s) cooling down this model", modelBlock.Count)
+		if !modelBlock.Until.IsZero() {
+			if d := time.Until(modelBlock.Until); d > 0 {
+				secs := int(math.Ceil(d.Seconds()))
+				retryAfterSec = secs
+				hint += fmt.Sprintf("; earliest unblock in %ds", secs)
+			}
+		}
+		if s := strings.TrimSpace(modelBlock.Reason); s != "" {
+			hint += "; upstream: " + s
+		}
+	} else if modelBlock.Blocked {
 		code = "model_unavailable"
 		// 有上游原文时保留它（含 requestId，用户要拿去向上游反馈），只把"有几个号
 		// 被挡、最早何时解封"这类本地调度信息放进 gateway_hint。
@@ -1250,9 +1276,31 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		status = http.StatusBadRequest
 	}
+	if retryAfterSec > 0 {
+		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSec))
+	}
 	writeOpenAIErrorHint(w, status, code, msg, hint)
 	st.status = status
 	st.outcome = reqlog.OutcomeHTTPError
+}
+
+// modelBlockIsTransient 判断模型级冷却的原因是「暂时忙/被限流」还是「确定性拒绝」。
+//
+// 依据是写冷却时存下的 Reason（pool.CooldownModelBusy / CooldownSoftForModel
+// 写入，来源是上游 body 或固定标记）：
+//   - 瞬时（可重试）：14003「模型繁忙」、6004「模型限流」；
+//   - 确定性（换模型才有效）：11102「该后端无此模型」、11158「号型不允许」。
+func modelBlockIsTransient(reason string) bool {
+	s := strings.ToLower(reason)
+	if s == "" {
+		return false
+	}
+	for _, marker := range []string{"14003", "6004", "model busy", "model rate limit", "rate limit"} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // tokensPerSecond 计算吐字速率（token/s），返回 (速率, 是否有意义)。
