@@ -118,11 +118,14 @@ func (s *Scheduler) makeupYesterday(a *auth.Auth) {
 }
 
 // claimBenefits 礼包 / 活动补偿（billing 域，有则领，无则业务错误静默跳过）。
+//
+// 只有回执里真带了 credit（>0）才记「到账」：上游对「已领过 / 本次无发放」可能回
+// code=0 且不带 credit 字段（解析为 0），那不是到账，记成「🎊 +0c」只会制造假账。
 func (s *Scheduler) claimBenefits(a *auth.Auth) {
-	if credit, err := s.cfg.Upstream.ClaimGift(a); err == nil {
+	if credit, err := s.cfg.Upstream.ClaimGift(a); err == nil && credit > 0 {
 		log.Printf("streak-bonus %s: 🎊 新手礼包 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
 	}
-	if credit, err := s.cfg.Upstream.ClaimCompensation(a); err == nil {
+	if credit, err := s.cfg.Upstream.ClaimCompensation(a); err == nil && credit > 0 {
 		log.Printf("streak-bonus %s: 🎊 补偿领取 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
 	}
 }
