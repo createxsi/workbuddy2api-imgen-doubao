@@ -2,6 +2,7 @@
 //
 // 资源经 go:embed 打进二进制（随服务部署，无外部构建步骤）：
 //   - index.html  页面骨架
+//   - theme.js    首屏主题预热（<head> 同步加载，早于样式表）
 //   - app.js      全部前端逻辑（独立文件而非内联，为了启用无需 unsafe-inline 的严格 CSP）
 //
 // 安全头对"面板页面与全部 /panel/api/* 响应"统一生效：CSP 限制脚本只能来自本服务，
@@ -19,6 +20,9 @@ import (
 //go:embed index.html
 var indexHTMLRaw []byte
 
+//go:embed theme.js
+var themeJS []byte
+
 //go:embed app.js
 var appJS []byte
 
@@ -34,9 +38,14 @@ func fingerprint(b []byte) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// indexHTML 是把 <script src="app.js"> 换成带指纹 URL 之后的页面字节。原始
-// index.html 保持无查询串形态（源码可读、diff 干净），指纹只在运行时注入。
-var indexHTML = []byte(strings.ReplaceAll(string(indexHTMLRaw), `src="app.js"`, `src="app.js?v=`+fingerprint(appJS)+`"`))
+// indexHTML 是把 <script src="theme.js"> / <script src="app.js"> 换成带指纹 URL
+// 之后的页面字节。原始 index.html 保持无查询串形态（源码可读、diff 干净），指纹只在
+// 运行时注入。
+var indexHTML = func() []byte {
+	s := strings.ReplaceAll(string(indexHTMLRaw), `src="theme.js"`, `src="theme.js?v=`+fingerprint(themeJS)+`"`)
+	s = strings.ReplaceAll(s, `src="app.js"`, `src="app.js?v=`+fingerprint(appJS)+`"`)
+	return []byte(s)
+}()
 
 // csp 内容安全策略（严格版，无需 unsafe-inline）：
 //   - default-src 'none'        默认全禁，逐个开口
@@ -69,6 +78,17 @@ func (p *Panel) index(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(indexHTML)
+}
+
+// themeScript 输出首屏主题预热脚本。
+//
+// 它必须被 <head> 以同步外链方式加载（CSP 禁内联）：晚于样式表就回到「刷新先闪深色」，
+// 因为用户的明暗偏好只存在浏览器 localStorage 里，服务端无从得知。
+func (p *Panel) themeScript(w http.ResponseWriter, r *http.Request) {
+	setSecurityHeaders(w)
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(themeJS)
 }
 
 // appScript 输出前端逻辑（同源脚本，供 CSP script-src 'self' 加载）。

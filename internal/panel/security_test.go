@@ -19,6 +19,7 @@ func TestSecurityHeadersOnAllPanelResponses(t *testing.T) {
 	p := newTestPanel()
 	paths := []struct{ method, path string }{
 		{"GET", "/panel/"},
+		{"GET", "/panel/theme.js"},
 		{"GET", "/panel/app.js"},
 		{"GET", "/panel/api/overview"}, // 401（未提供 key）
 		{"POST", "/panel/api/config"},  // 401
@@ -175,5 +176,37 @@ func TestScriptURLCarriesContentFingerprint(t *testing.T) {
 	sum := sha256.Sum256(appRec.Body.Bytes())
 	if got, want := rest[:j], hex.EncodeToString(sum[:8]); got != want {
 		t.Errorf("URL 指纹=%s 内容实算=%s（两者必须一致）", got, want)
+	}
+}
+
+// 首屏主题预热脚本：必须能同源取到、带内容指纹，且引用的位置早于样式表——
+// 放到 <style> 之后就会退回「刷新先按默认深色画一帧」的闪烁。
+func TestThemeBootScriptRunsBeforeStyles(t *testing.T) {
+	p := newTestPanel()
+
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/theme.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("theme.js code=%d want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "javascript") {
+		t.Errorf("theme.js Content-Type=%q want javascript", ct)
+	}
+	// 键名与 app.js 的 LS_THEME 必须一致，否则预热读不到用户偏好。
+	if !strings.Contains(rec.Body.String(), "wb2api.theme") || !strings.Contains(string(appJS), "'wb2api.theme'") {
+		t.Error("theme.js 与 app.js 的主题存储键对不上")
+	}
+
+	page := httptest.NewRecorder()
+	p.ServeHTTP(page, httptest.NewRequest("GET", "/panel/", nil))
+	body := page.Body.String()
+	want := `<script src="theme.js?v=` + fingerprint(rec.Body.Bytes()) + `"></script>`
+	iScript := strings.Index(body, want)
+	if iScript < 0 {
+		t.Fatalf("index.html 未以指纹 URL 引用 theme.js（want %s）", want)
+	}
+	iStyle := strings.Index(body, "<style>")
+	if iStyle < 0 || iScript > iStyle {
+		t.Errorf("theme.js 必须早于 <style> 加载: script@%d style@%d", iScript, iStyle)
 	}
 }

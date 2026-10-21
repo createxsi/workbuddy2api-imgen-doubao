@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>WorkBuddy2API · 控制台</title>
+<!-- 首屏主题预热：必须留在样式表之前、且是同步外链脚本（CSP 禁内联）。
+     html 根节点上的 data-theme="dark" 只是无脚本兜底；真实偏好在 localStorage，
+     只有 body 末尾的 app.js 才读它——那样第一帧已经按深色画完了，刷新就会
+     「先闪一下夜间模式」。theme.js 把判定提到样式表解析之前。 -->
+<script src="theme.js"></script>
 <style>
 /* ── 设计令牌：明暗两套独立色板 ─────────────────────────────────────────
    冷石墨基调（仪表盘语言，非营销页）：底色分层 + 单一靛蓝强调（仅交互），
