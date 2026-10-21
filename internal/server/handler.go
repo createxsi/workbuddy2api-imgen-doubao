@@ -830,7 +830,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			if !busyWaited {
 				if blk := h.cfg.Pool.ModelBlocked(bareModel); blk.Blocked {
 					if d := busyWaitFor(blk, time.Now(), busyWaitCap); d > 0 {
-						if !sleepCtx(r.Context(), jitterDur(d)) {
+						w := waitPast(d)
+						log.Printf("busy-wait: model=%s realm=%q %d account(s) busy, waiting %s then retry once (issue #46)", bareModel, realm, blk.Count, w.Round(time.Millisecond))
+						if !sleepCtx(r.Context(), w) {
 							break // 客户端已断连：不必再等
 						}
 						busyWaited = true
@@ -1258,6 +1260,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	//
 	// 用 400 而非 503：这是"你选的这个模型当前不可用"，不是"服务端暂时过载"。
 	// 换号重试必然同样失败，客户端不该按可重试错误处理。
+	// 轮转耗尽等其它退出路径不经过选号失败分支，modelBlock 还是零值：在这里补一次
+	// 快照（仅瞬时忙/限流形态），让「全池该模型只是忙」统一成 503 model_busy + Retry-After，
+	// 而不是 429 且无 Retry-After（MaxRotate=1 时必现）。
+	if !modelBlock.Blocked {
+		if snap := h.cfg.Pool.ModelBlocked(bareModel); snap.Blocked && modelBlockIsTransient(snap.Reason) {
+			modelBlock = snap
+		}
+	}
 	//
 	// 例外：冷却原因是瞬时的「忙 / 被限流」（14003 模型繁忙、6004 模型限流）时，
 	// 号本身活着、等一下就能用，回 400 会被客户端读成「模型不可用、重试无意义」。

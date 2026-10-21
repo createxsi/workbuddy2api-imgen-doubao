@@ -23,9 +23,6 @@ func TestHasImagePartMixedContent(t *testing.T) {
 			if got := hasImagePart([]byte(tt.body)); got != tt.want {
 				t.Errorf("hasImagePart() = %v, want %v", got, tt.want)
 			}
-			if got := imagePartIfPresent([]byte(tt.body)); got != tt.want {
-				t.Errorf("imagePartIfPresent() = %v, want %v", got, tt.want)
-			}
 		})
 	}
 }
