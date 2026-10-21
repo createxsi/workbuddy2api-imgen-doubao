@@ -1,6 +1,8 @@
 package panel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,8 +72,8 @@ func TestIndexReferencesExternalScript(t *testing.T) {
 	p.ServeHTTP(rec, httptest.NewRequest("GET", "/panel/", nil))
 	body := rec.Body.String()
 
-	if !strings.Contains(body, `<script src="app.js"></script>`) {
-		t.Error("index.html must load app.js externally (inline script is blocked by CSP)")
+	if !strings.Contains(body, `<script src="app.js?v=`) {
+		t.Error("index.html must load app.js externally with content fingerprint (inline script is blocked by CSP)")
 	}
 	// 反例保护：出现内联 <script>...</script> 内容块即为回归
 	if strings.Contains(body, "<script>\n") || strings.Contains(body, "<script> ") {
@@ -142,5 +144,36 @@ func TestAuthLayerBehavior(t *testing.T) {
 	p.ServeHTTP(rec2, req2)
 	if rec2.Code == http.StatusUnauthorized {
 		t.Error("valid key must pass the auth layer")
+	}
+}
+
+// 页面里的脚本 URL 必须带内容指纹，且指纹与真发的脚本内容对得上：
+// 指纹算错/接错内容等于没防。
+func TestScriptURLCarriesContentFingerprint(t *testing.T) {
+	p := newTestPanel()
+
+	page := httptest.NewRecorder()
+	p.ServeHTTP(page, httptest.NewRequest("GET", "/panel/", nil))
+	body := page.Body.String()
+
+	appRec := httptest.NewRecorder()
+	p.ServeHTTP(appRec, httptest.NewRequest("GET", "/panel/app.js?v=whatever", nil))
+	if appRec.Code != http.StatusOK {
+		t.Fatalf("带查询串的 app.js 必须照常服务: code=%d", appRec.Code)
+	}
+
+	const src = `src="app.js?v=`
+	i := strings.Index(body, src)
+	if i < 0 {
+		t.Fatalf("app.js 引用未带指纹")
+	}
+	rest := body[i+len(src):]
+	j := strings.IndexByte(rest, '"')
+	if j < 8 {
+		t.Fatalf("指纹形态异常: %q", rest)
+	}
+	sum := sha256.Sum256(appRec.Body.Bytes())
+	if got, want := rest[:j], hex.EncodeToString(sum[:8]); got != want {
+		t.Errorf("URL 指纹=%s 内容实算=%s（两者必须一致）", got, want)
 	}
 }
