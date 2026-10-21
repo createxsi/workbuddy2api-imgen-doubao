@@ -119,3 +119,25 @@ func TestSetAppearanceTheme(t *testing.T) {
 		t.Errorf("body=%v want kind=theme resource_key=theme-tkmw7j", got)
 	}
 }
+
+// TestDesktopChatWithExpertUsesChatUA 专家对话走 /v2/chat/completions，UA 必须与主对话
+// 同形态（c.userAgent），不能是固定旧版本号的 desktopUA。
+func TestDesktopChatWithExpertUsesChatUA(t *testing.T) {
+	var gotUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUA = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	c := &Client{HTTP: srv.Client(), ChatBaseCN: srv.URL}
+	a := &auth.Auth{AccessToken: "at", UID: "u-dt"}
+	_, _, _ = c.DesktopChatWithExpert(a, "expert-x")
+	if want := c.userAgent(a); gotUA != want {
+		t.Fatalf("UA=%q want %q", gotUA, want)
+	}
+	if gotUA == desktopUA {
+		t.Fatalf("专家对话不应使用固定的 desktopUA")
+	}
+}

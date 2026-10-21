@@ -441,7 +441,9 @@ func (c *Client) DesktopChatWithExpert(a *auth.Auth, expertID string) (conversat
 	h.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	h.Set("Content-Type", "application/json")
 	h.Set("Accept", "text/event-stream")
-	h.Set("User-Agent", desktopUA)
+	// chat 链路用与主对话一致的 SDK 形态 UA（c.userAgent：版本可配、第二段随 realm），
+	// 不复用 desktopUA——那是固定旧版本号的非 SDK 请求形态，与真机 chat 不符。
+	h.Set("User-Agent", c.userAgent(a))
 	h.Set("X-Domain", c.chatBase(a))
 	h.Set("X-Product", "SaaS")
 	h.Set("X-User-Id", a.UID)
