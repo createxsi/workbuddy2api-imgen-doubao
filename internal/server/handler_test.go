@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/prompt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/redisstore"
@@ -703,8 +704,8 @@ func TestChatHardCreditCooldownUntilNextDay4AM(t *testing.T) {
 		t.Errorf("reason=%q", st.Reason)
 	}
 	// 硬信贷冷却必须是次日 04:00，而不是固定 12h/配置时长。
-	if st.Until.Hour() != 4 {
-		t.Errorf("until hour=%d want 4 (next-day 04:00)", st.Until.Hour())
+	if st.Until.In(cst.Loc).Hour() != 4 {
+		t.Errorf("until hour=%d want 4 (next-day 04:00)", st.Until.In(cst.Loc).Hour())
 	}
 	// 距次日 04:00 最长 28h（凌晨 00:00~04:00 间运行时 now→次日 04:00 跨度 > 24h，属正常）。
 	if d := time.Until(st.Until); d <= 0 || d > 28*time.Hour {
@@ -740,7 +741,7 @@ func TestChat429Code14018UsesHardCreditCooldown(t *testing.T) {
 	if !ok || !st.Cooling {
 		t.Fatalf("14018 account should be cooling: %+v ok=%v", st, ok)
 	}
-	if st.Reason != "余额不足" || st.Until.Hour() != 4 {
+	if st.Reason != "余额不足" || st.Until.In(cst.Loc).Hour() != 4 {
 		t.Fatalf("14018 should use hard-credit cooldown, got reason=%q until=%v", st.Reason, st.Until)
 	}
 	if got := p.Pick(); got == nil || got.UID != "good" {

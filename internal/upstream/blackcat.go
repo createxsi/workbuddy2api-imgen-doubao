@@ -1,7 +1,7 @@
 // blackcat.go 夜猫子任务（black_cat）+ 新手礼包/补偿 API。
 //
 // 判据（WorkBuddy-Daily 项目实测口径 + 本网关验证）：black_cat 要求在
-// **23:00–08:00（本地时区）窗口内**完成 3 次 glm-5.2 对话并上报 chat 事件链；
+// **23:00–08:00（CST）窗口内**完成 3 次 glm-5.2 对话并上报 chat 事件链；
 // 窗口外行为不计分。真实对话走网关既有 ChatStream（glm-5.2），事件链用
 // ReportChatActivityModel（chat_5 同款上报形状）。
 package upstream
@@ -14,11 +14,12 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
-// InNightWindow 当前是否处于夜猫子计数窗口（23:00–08:00 本地时区）。
+// InNightWindow 当前是否处于夜猫子计数窗口（23:00–08:00 CST：上游按自然日计时）。
 func InNightWindow(now time.Time) bool {
-	h := now.Hour()
+	h := now.In(cst.Loc).Hour()
 	return h >= 23 || h < 8
 }
 
@@ -96,7 +97,7 @@ func (c *Client) ClaimCompensation(a *auth.Auth) (int64, error) {
 
 // HeatmapYesterdayMissed 检查昨日是否漏签（heatmap cell score==0）。
 func (c *Client) HeatmapYesterdayMissed(a *auth.Auth) (bool, error) {
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	yesterday := cst.Day(time.Now().AddDate(0, 0, -1))
 	data, err := c.growthJSON(a, http.MethodGet, "/activity/growth/heatmap", nil)
 	if err != nil {
 		return false, err

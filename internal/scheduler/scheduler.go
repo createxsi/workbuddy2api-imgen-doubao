@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
@@ -198,11 +199,15 @@ func poke(ch chan struct{}) {
 	}
 }
 
-// nextFire 返回 now 之后最近的一个整点触发时间；hours 为本地小时（0-23）。
+// nextFire 返回 now 之后最近的一个整点触发时间；hours 为 CST 小时（0-23）。
+//
+// 时点按上游自然日的钟点解释（CST），不按宿主时区：UTC 容器里配 [10] 若用
+// now.Location() 会跑在 CST 18:00（见 internal/cst 的包注释）。
 func nextFire(now time.Time, hours []int) time.Time {
 	var earliest time.Time
+	local := now.In(cst.Loc)
 	for _, h := range hours {
-		t := time.Date(now.Year(), now.Month(), now.Day(), h, 0, 0, 0, now.Location())
+		t := time.Date(local.Year(), local.Month(), local.Day(), h, 0, 0, 0, cst.Loc)
 		if !t.After(now) {
 			t = t.Add(24 * time.Hour)
 		}

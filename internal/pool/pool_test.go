@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
 // withNoPickGap 临时关闭防并发撞号窗口（minPickGap=0），让纯加权分布测试不受影响。
@@ -640,8 +641,8 @@ func TestCooldownUntilTomorrow4AM(t *testing.T) {
 	if st.Until.Before(after) {
 		t.Errorf("until %v is in the past (call span %v..%v)", st.Until, before, after)
 	}
-	if st.Until.Hour() != 4 {
-		t.Errorf("until hour=%d want 4", st.Until.Hour())
+	if h := st.Until.In(cst.Loc).Hour(); h != 4 {
+		t.Errorf("until hour(CST)=%d want 4", h)
 	}
 	if d := st.Until.Sub(after); d > 24*time.Hour {
 		t.Errorf("until %v is more than 24h out: %v", st.Until, d)
@@ -662,7 +663,7 @@ func TestCooldownUntilTomorrow4AMPersists(t *testing.T) {
 	p2 := New(fp)
 	p2.Add(&auth.Auth{UID: "u1"})
 	st, ok := p2.Status("u1")
-	if !ok || st.Until.Hour() != 4 || st.Reason != "余额不足" {
+	if !ok || st.Until.In(cst.Loc).Hour() != 4 || st.Reason != "余额不足" {
 		t.Errorf("status after reload=%+v ok=%v", st, ok)
 	}
 }
@@ -2001,5 +2002,15 @@ func TestResumeIdempotent(t *testing.T) {
 	}
 	if st, _ := p.Status("u1"); st.Paused {
 		t.Errorf("Paused 应仍为 false: %+v", st)
+	}
+}
+
+// TestNextDay4AMIsCST 硬冷却的「次日 04:00」是北京 04:00（签到按上游自然日恢复），
+// 不随宿主时区漂移。
+func TestNextDay4AMIsCST(t *testing.T) {
+	now := time.Date(2026, 10, 21, 5, 0, 0, 0, time.UTC)   // 北京 10-21 13:00
+	want := time.Date(2026, 10, 21, 20, 0, 0, 0, time.UTC) // 北京 10-22 04:00
+	if got := nextDay4AM(now); !got.Equal(want) {
+		t.Fatalf("nextDay4AM=%v want %v", got, want)
 	}
 }
