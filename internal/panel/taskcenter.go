@@ -46,11 +46,13 @@ func growthPending(t upstream.Task) bool {
 	if t.Locked {
 		return false
 	}
-	if t.Target > 0 && t.Current >= t.Target {
-		// 达标未领：也入队（队列执行后会自动领）——但仅限有自动化动作的任务，
-		// 否则队列执行时会因 autoActionFor 为 nil 直接报错。
-		return autoActionFor(t.TaskCode) != nil
+	if t.Claimable || (t.Target > 0 && t.Current >= t.Target) {
+		// 达标未领：无条件入队（白名单外的任务也算）。执行路径看到已达标直接
+		// claim，不做动作、不消耗对话配额。此前这里要求有自动化动作，白名单外
+		// 的任务即使达标也永远进不了队列、永远没人领，积分就卡住。
+		return true
 	}
+	// 未达标：必须有自动化动作，否则入队也只会空转。
 	return autoActionFor(t.TaskCode) != nil
 }
 
@@ -416,9 +418,6 @@ func (p *Panel) acceptPendingTasks(a *auth.Auth) int {
 // accountTaskAuto 同语义，结果以文字返回）。
 func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 	act := autoActionFor(code)
-	if act == nil {
-		return "", fmt.Errorf("任务 %s 无自动动作", code)
-	}
 	// taskByCode 已双口径（mp 专属码自动回落 mp 列表）。
 	before, err := p.taskByCode(a, code)
 	if err != nil {
@@ -430,6 +429,26 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 	isMP := isMPTaskCode(code)
 	if before.Claimed {
 		return "已完成（已领取）", nil
+	}
+	if act == nil {
+		// 白名单外的任务只做「补领」：已达标直接 claim，不发任何动作请求；
+		// 未达标说明没有可执行的自动动作（growthPending 不会让它入队，防御）。
+		if !before.Claimable && (before.Target <= 0 || before.Current < before.Target) {
+			return "", fmt.Errorf("任务 %s 无自动动作", code)
+		}
+		var credit, energy int64
+		var cerr error
+		if isMP {
+			credit, energy, cerr = p.cfg.Upstream.ClaimRewardMP(a, code)
+		} else {
+			credit, energy, cerr = p.cfg.Upstream.ClaimReward(a, code)
+		}
+		if cerr != nil {
+			return "", cerr
+		}
+		msg := fmt.Sprintf("补领：已达标未领奖 +%d 分 +%d 能", credit, energy)
+		log.Printf("panel: 队列 growth uid=%s code=%s: %s", a.UID, code, msg)
+		return msg, nil
 	}
 	msg, err := act.run(p, a)
 	if err != nil {
