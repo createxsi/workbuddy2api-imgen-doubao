@@ -607,7 +607,7 @@ func TestModelCooldownsPersistCompatOldState(t *testing.T) {
 	}
 }
 
-// TestCooldownModelBusyShortWindow 14003「模型繁忙」的停车窗口：60s 起、封顶 3m，
+// TestCooldownModelBusyShortWindow 14003「模型繁忙」的停车窗口：10s 起、封顶 1m，
 // 窗口内重复命中不延长，且不写账号级 until。
 //
 // 与 CooldownSoftForModel 的差别是本方法独立于 soft_rate 阶梯：后者 600s 起、

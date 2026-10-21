@@ -195,12 +195,14 @@ func (p *Pool) CooldownSoftForModel(uid string, base time.Duration, resetAt time
 //
 // 不复用 soft_rate 家族：那套阶梯（默认 600s 起、按命中翻倍、封顶 2h）是给
 // 「这个账号/模型被持续限流」准备的，惩罚一次瞬时抖动代价过高。14003 的
-// displayMsg 就是「模型繁忙，请换模型或稍后重试」，60s 足够让上游窗口滑过去；
-// 同一 (号, 模型) 反复命中再翻倍，但封顶 3 分钟——宁可多换一次号，也不要把
-// 一个忙碌模型停成十分钟不可用。
+// displayMsg 就是「模型繁忙，请换模型或稍后重试」——它是**间歇**的：生产日志里
+// 同一分钟内既有 14003 也有成功（issue #46），所以首档取 10s 而不是分钟级：
+// 三个号的冷却叠在一起时，60s 首档会把 10 秒的抖动放大成一整段客户端可见的断流。
+// 同一 (号, 模型) 反复命中再翻倍，封顶 1 分钟——宁可多交一次 429，也不要把
+// 一个间歇繁忙的模型停成整分钟不可用。
 const (
-	modelBusyBase = 60 * time.Second
-	modelBusyMax  = 3 * time.Minute
+	modelBusyBase = 10 * time.Second
+	modelBusyMax  = time.Minute
 )
 
 // CooldownModelBusy 把 (账号, 模型) 停一个短窗口（14003 模型繁忙专用）。
