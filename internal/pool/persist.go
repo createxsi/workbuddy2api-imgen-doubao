@@ -4,12 +4,15 @@ package pool
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
 var flushInterval = 5 * time.Second
@@ -118,8 +121,13 @@ func (p *Pool) Flush() {
 
 // Add 加入账号；已存在则保留原状态、更新凭证（upsert 单账号，不影响其他账号）。
 func (p *Pool) load() {
-	raw, err := os.ReadFile(p.stateFp)
+	// safefile.Read：正文坏（掉电留全 0、被截断）时回退 state.json.bak，两边都坏
+	// 才放弃。文件不存在是首次启动，保持静默。
+	raw, err := safefile.Read(p.stateFp, nil)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			log.Printf("pool: state.json 不可用（%v），跳过本地状态恢复: %s", err, p.stateFp)
+		}
 		return
 	}
 	var sf stateFile
@@ -241,12 +249,9 @@ func (p *Pool) saveLocked() {
 	if dir := filepath.Dir(p.stateFp); dir != "" {
 		_ = os.MkdirAll(dir, 0o755)
 	}
-	tmp := p.stateFp + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		p.notePersistFail(err)
-		return
-	}
-	if err := os.Rename(tmp, p.stateFp); err != nil {
+	// safefile：fsync 后 rename（掉电不会留下全 0 的 state.json），并把上一份
+	// 有效内容留成 .bak —— 读到坏文件时兜底，冷却状态不至于一次掉电全丢。
+	if err := safefile.WriteKeep(p.stateFp, raw, 0o600); err != nil {
 		p.notePersistFail(err)
 		return
 	}

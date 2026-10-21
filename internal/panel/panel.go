@@ -27,6 +27,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/livecfg"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/reqlog"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
@@ -660,6 +661,10 @@ func (p *Panel) accountRemove(w http.ResponseWriter, r *http.Request) {
 	fileMsg := ""
 	if a.FilePath != "" {
 		if err := os.Remove(a.FilePath); err != nil && !os.IsNotExist(err) {
+			fileMsg = err.Error()
+		}
+		// 凭证写盘会留 .bak（safefile.WriteKeep）：删号必须一并删掉，否则旧凭证仍留在磁盘上。
+		if err := os.Remove(safefile.Bak(a.FilePath)); err != nil && !os.IsNotExist(err) && fileMsg == "" {
 			fileMsg = err.Error()
 		}
 	}

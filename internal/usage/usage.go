@@ -16,7 +16,9 @@ package usage
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -24,6 +26,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/linguo2625469/workbuddy2api-panel/internal/safefile"
 )
 
 // hourlyKeep 小时桶的保留时长；超出后折叠为日桶。
@@ -287,9 +291,10 @@ func (r *Recorder) Rollup(now time.Time) {
 // ---------------------------------------------------------------- 持久化 ----
 
 func (r *Recorder) load() error {
-	raw, err := os.ReadFile(r.path)
+	// safefile.Read：正文坏（掉电留全 0、被截断）时回退 .bak，统计不归零。
+	raw, err := safefile.Read(r.path, nil)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
 		return err
@@ -331,12 +336,7 @@ func (r *Recorder) flush(force bool) {
 		log.Printf("[usage] 建目录失败: %v", err)
 		return
 	}
-	tmp := r.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		log.Printf("[usage] 写临时文件失败: %v", err)
-		return
-	}
-	if err := os.Rename(tmp, r.path); err != nil {
+	if err := safefile.WriteKeep(r.path, raw, 0o600); err != nil {
 		log.Printf("[usage] 原子替换失败: %v", err)
 	}
 }
