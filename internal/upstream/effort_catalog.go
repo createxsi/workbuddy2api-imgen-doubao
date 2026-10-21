@@ -22,10 +22,14 @@ type effortCap struct {
 
 // cnEffortFallback CN / CodeBuddy 面静态兜底表。
 // 三档模型 defaultEffort 均为 high（product.ts CODEBUDDY_FALLBACK_MODELS 逐条 defaultReasoningEffort）。
+//
+// 按国区真机带鉴权 /v3/config 目录核对：deepseek-v4-flash 实为 high,xhigh、
+// deepseek-v4-pro 实为 high,xhigh、kimi-k3-1 实为 low,high,xhigh——此前照 product.ts
+// 抄的 low,high,max / low,high,xhigh / medium 与上游目录不符，远程桶缺失时会按错档位降级。
 var cnEffortFallback = map[string]effortCap{
-	"deepseek-v4-flash":   {efforts: []string{"low", "high", "max"}},
+	"deepseek-v4-flash":   {efforts: []string{"high", "xhigh"}, defaultEffort: "high"},
 	"deepseek-v4.1-flash": {efforts: []string{"low", "high", "max"}, defaultEffort: "high"},
-	"deepseek-v4-pro":     {efforts: []string{"low", "high", "xhigh"}, defaultEffort: "high"},
+	"deepseek-v4-pro":     {efforts: []string{"high", "xhigh"}, defaultEffort: "high"},
 	"hy4-preview":         {efforts: []string{"high"}, defaultEffort: "high"},
 	"hy4-preview-x":       {efforts: []string{"high"}},
 	"hy3":                 {efforts: []string{"low", "high"}, defaultEffort: "high"},
@@ -35,7 +39,7 @@ var cnEffortFallback = map[string]effortCap{
 	"glm-5.2":             {efforts: []string{"high", "xhigh"}, defaultEffort: "high"},
 	"glm-5.1":             {efforts: []string{"medium"}},
 	"glm-5v-turbo":        {efforts: []string{"medium"}},
-	"kimi-k3-1":           {efforts: []string{"medium"}},
+	"kimi-k3-1":           {efforts: []string{"low", "high", "xhigh"}},
 	"kimi-k2.7":           {efforts: []string{"medium"}},
 	"kimi-k2.6":           {efforts: []string{"medium"}},
 	"minimax-m3":          {efforts: []string{"medium"}},

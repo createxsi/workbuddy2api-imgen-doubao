@@ -303,3 +303,17 @@ func TestInjectThinkingStringPreserved(t *testing.T) {
 		t.Errorf("stream 未强制: %s", out)
 	}
 }
+
+// TestCNEffortFallbackMatchesCatalog 钉住按国区真机 /v3/config 目录核对过的三条档位。
+func TestCNEffortFallbackMatchesCatalog(t *testing.T) {
+	want := map[string]string{
+		"deepseek-v4-flash": "high,xhigh",
+		"deepseek-v4-pro":   "high,xhigh",
+		"kimi-k3-1":         "low,high,xhigh",
+	}
+	for model, w := range want {
+		if got := strings.Join(cnEffortFallback[model].efforts, ","); got != w {
+			t.Errorf("%s efforts=%s want %s", model, got, w)
+		}
+	}
+}
