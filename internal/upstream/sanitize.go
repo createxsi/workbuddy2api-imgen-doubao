@@ -20,6 +20,51 @@ var sanitizeFeatures = []string{
 	"You are a coding agent running in the Codex CLI", // Codex instructions 首段（截断前缀即可命中）
 	"github.com/anthropics/",                          // 反馈句里的 Anthropic 仓库链接
 	"11128",                                           // 上游反探测：裸数字错误码
+	"Sisyphus-Junior - Focused executor from OhMyOpenCode", // OhMyOpenCode 子代理身份句
+}
+
+// sanitizeOmoRe OhMyOpenCode 子代理身份句：上游按大小写不敏感的连续子串拦截，
+// 单独的 "Sisyphus-Junior" 或 "OhMyOpenCode" 都放行，只去掉 "from OhMyOpenCode" 归属。
+var sanitizeOmoRe = regexp.MustCompile(`(?i)Sisyphus-Junior - Focused executor from OhMyOpenCode`)
+
+// sanitizeIdentityRe 「客户端自我介绍句式 + 品牌」指纹：上游把
+//
+//	You are an AI agent powered by DeepSeek Harness.
+//	You are a coding agent powered by the deepseek-v4.1-flash model.
+//	You are an AI assistant built on DeepSeek.
+//
+// 这类句子当作非官方渠道（大小写不敏感、连续子串匹配，命中 400/11128）；
+// 单独的品牌词放行。整句换成不带品牌的中性句。动词表覆盖同类变体，
+// 冠词后允许 0~3 个修饰词，窗口有界，避免误伤普通句子。
+// 只作用于 system / developer（见 sanitizeMessages）：user / tool 里的同名文本是用户数据。
+// 参考 ardeyouxipianyi/workbuddy2api-hub #533 #537 #539。
+var sanitizeIdentityRe = regexp.MustCompile(`(?i)You are\s+(?:an?\s+|the\s+)?(?:[\w.-]+\s+){0,3}?(?:agent|assistant|model|AI|LLM)?[\s,]*(?:powered by|built on|built by|created by|developed by|made by|trained by)[^\n]*?(?:\.(\s)|\.$|(\n)|$)`)
+
+// sanitizeIdentityVerbs 身份句的廉价前置筛（小写比较）。
+var sanitizeIdentityVerbs = []string{"powered by", "built on", "built by", "created by", "developed by", "made by", "trained by"}
+
+const sanitizeIdentityReplacement = "You are a helpful AI assistant."
+
+// sanitizeIdentity 改写 system/developer 文本里的自我介绍 + 品牌句。
+func sanitizeIdentity(text string) string {
+	if text == "" {
+		return text
+	}
+	low := strings.ToLower(text)
+	if !strings.Contains(low, "you are") {
+		return text
+	}
+	hit := false
+	for _, v := range sanitizeIdentityVerbs {
+		if strings.Contains(low, v) {
+			hit = true
+			break
+		}
+	}
+	if !hit || !sanitizeIdentityRe.MatchString(text) {
+		return text
+	}
+	return sanitizeIdentityRe.ReplaceAllString(text, sanitizeIdentityReplacement+"${1}${2}")
 }
 
 // sanitizeHdrRe 剥离层：header 键名即触发（与值无关），整段删除。
@@ -86,6 +131,7 @@ func sanitizeText(text string) string {
 	for _, rw := range sanitizeRewrites {
 		text = strings.ReplaceAll(text, rw[0], rw[1])
 	}
+	text = sanitizeOmoRe.ReplaceAllString(text, "Sisyphus-Junior - Focused executor")
 	if sanitizeHdrRe.MatchString(text) {
 		text = sanitizeHdrRe.ReplaceAllString(text, "")
 	}
@@ -112,15 +158,20 @@ func hasFingerprint(text string) bool {
 			return true
 		}
 	}
-	return sanitizeBareHdrRe.MatchString(text)
+	return sanitizeBareHdrRe.MatchString(text) || sanitizeOmoRe.MatchString(text)
 }
 
 // sanitizeContent 兼容字符串与多模态数组；只动 text part，image 等 part 不动。
 // 返回净化后的值及是否发生变化。
 func sanitizeContent(v any) (any, bool) {
+	return sanitizeContentWith(v, sanitizeText)
+}
+
+// sanitizeContentWith 同 sanitizeContent，文本净化函数可替换（system/developer 额外改写身份句）。
+func sanitizeContentWith(v any, fn func(string) string) (any, bool) {
 	switch c := v.(type) {
 	case string:
-		s := sanitizeText(c)
+		s := fn(c)
 		return s, s != c
 	case []any:
 		changed := false
@@ -133,7 +184,7 @@ func sanitizeContent(v any) (any, bool) {
 			if !ok {
 				continue
 			}
-			if s := sanitizeText(text); s != text {
+			if s := fn(text); s != text {
 				m["text"] = s
 				changed = true
 			}
@@ -186,8 +237,12 @@ func sanitizeMessages(messages []any) bool {
 		}
 		// content 与 tool_calls 各自独立判断：content 可以为 null（工具调用轮），
 		// 早期版本在此 continue，导致这类消息的 tool_calls 完全不被净化。
+		clean := sanitizeText
+		if role, _ := m["role"].(string); role == "system" || role == "developer" {
+			clean = func(t string) string { return sanitizeIdentity(sanitizeText(t)) }
+		}
 		if c, ok := m["content"]; ok {
-			if nc, ch := sanitizeContent(c); ch {
+			if nc, ch := sanitizeContentWith(c, clean); ch {
 				m["content"] = nc
 				changed = true
 			}
