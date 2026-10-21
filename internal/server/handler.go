@@ -617,6 +617,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// modelBlock 记录本次是否因「模型级冷却」而选不到号（下方 acct==nil 分支填充）。
 	// 默认零值 Blocked=false = 按既有的"没有可用账号"口径报错。
 	var modelBlock pool.ModelBlockStatus
+	// busyWaited 本次请求是否已经为「模型繁忙」等过一轮（见 acct==nil 分支）。
+	busyWaited := false
 
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
@@ -821,6 +823,23 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			acct = h.cfg.Pool.PickExcludingForRealm(tried, bareModel, realm)
 		}
 		if acct == nil {
+			// 全池该模型只是被 14003「模型繁忙」的短冷却挡住时，先等它的最早解封
+			// （上限 busyWaitCap）再试，而不是把几秒的抖动直接变成客户端可见的断流：
+			// 上游繁忙是间歇的，多个号的短冷却叠在一起会把间歇放大成整段不可用。
+			// 只等一次、不占在途名额、不算一次换号；超过上限仍按 503 报。
+			if !busyWaited {
+				if blk := h.cfg.Pool.ModelBlocked(bareModel); blk.Blocked {
+					if d := busyWaitFor(blk, time.Now(), busyWaitCap); d > 0 {
+						if !sleepCtx(r.Context(), jitterDur(d)) {
+							break // 客户端已断连：不必再等
+						}
+						busyWaited = true
+						modelBlock = blk
+						i-- // 等待不算一次换号：槽位留给真正的尝试
+						continue
+					}
+				}
+			}
 			st.status = http.StatusServiceUnavailable
 			// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：
 			//   (a) 池子真的没有可用号（账号级冷却/在途占满/积分保底）；
@@ -1467,7 +1486,7 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 				return
 			}
 			// 14003 没有恢复时刻，上游文案就是让客户端换模型/稍后重试：
-			// 给独立短窗口（60s 起、封顶 3m），不套 soft_rate 的 600s→2h 阶梯。
+			// 给独立短窗口（10s 起、封顶 1m），不套 soft_rate 的 600s→2h 阶梯。
 			if upstream.IsModelBusy(body) {
 				h.cfg.Pool.CooldownModelBusy(uid, model, "14003 model busy")
 				return

@@ -27,6 +27,9 @@ import (
 // 断言表格行输出的测试（logging_test.go 中的 ChatLogs/LogChatRow 系列）用 withChatLog 临时开启。
 func TestMain(m *testing.M) {
 	chatLogEnabled = false
+	// 模型繁忙的等待路径默认关闭：否则命中它的测试要真睡满 10s（判据由
+	// busywait_test.go 单独钉住）。
+	busyWaitCap = 0
 	os.Exit(m.Run())
 }
 
