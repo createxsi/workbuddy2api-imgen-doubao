@@ -179,6 +179,12 @@ func BuildImageUpstreamBody(req *ImageGenRequest, model string) ([]byte, error) 
 // 但 Accept 保持 application/json（生图是非流式；ChatHeaders 的 event-stream 不适用）。
 func (c *Client) ImageHeaders(req *http.Request, a *auth.Auth, clientIP string) {
 	c.CommonHeaders(req, a)
+	// 与 ChatHeaders 同口径剥离客户端 chat 出站从不发的头（见 ChatHeaders 注释）。
+	req.Header.Del("Origin")
+	req.Header.Del("Referer")
+	req.Header.Del("Accept-Language")
+	req.Header.Del("X-Machine-ID")
+	req.Header.Del("X-Session-ID")
 	req.Header.Set("Accept", "application/json")
 	if at := a.AccessTokenValue(); at != "" {
 		req.Header.Set("Authorization", "Bearer "+at)
@@ -195,13 +201,9 @@ func (c *Client) ImageHeaders(req *http.Request, a *auth.Auth, clientIP string) 
 	if a != nil && !a.IsGlobal() {
 		if a.EnterpriseID != "" {
 			req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
-		} else {
-			req.Header.Set("X-No-Enterprise-Id", "1")
 		}
 		if d := a.DomainValue(); d != "" {
 			req.Header.Set("X-Domain", d)
-		} else {
-			req.Header.Set("X-No-Department-Info", "1")
 		}
 	} else {
 		c.injectGlobalChatHeaders(req, a)
@@ -211,7 +213,7 @@ func (c *Client) ImageHeaders(req *http.Request, a *auth.Auth, clientIP string) 
 	c.injectDeviceToken(req, a)
 	// 会话头族（对话/请求/消息/B3）：上游后台按 X-Conversation-Request-ID 聚合，
 	// 生图不带会被记成碎片。空 meta 时函数内部自补 32 hex。
-	c.injectConversationHeaders(req, ChatMeta{})
+	c.injectConversationHeaders(req, a.UID, ChatMeta{})
 }
 
 // GenerateImage 发一次文本生图请求（非流式 JSON），返回上游**原始信封**与 HTTP 状态。
