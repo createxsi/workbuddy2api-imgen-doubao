@@ -1625,16 +1625,22 @@ func writeOpenAIErrorHint(w http.ResponseWriter, status int, code, msg, hint str
 func hasImagePart(body []byte) bool {
 	var peek struct {
 		Messages []struct {
-			Content []struct {
-				Type string `json:"type"`
-			} `json:"content"`
+			Content json.RawMessage `json:"content"`
 		} `json:"messages"`
 	}
 	if json.Unmarshal(body, &peek) != nil {
 		return false
 	}
 	for _, m := range peek.Messages {
-		for _, p := range m.Content {
+		// Text-only system/history messages use strings; tool-call messages
+		// may use null. Neither should hide images in another message.
+		var parts []struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(m.Content, &parts) != nil {
+			continue
+		}
+		for _, p := range parts {
 			if p.Type == "image_url" {
 				return true
 			}
