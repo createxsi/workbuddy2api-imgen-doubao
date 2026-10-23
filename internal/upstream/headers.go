@@ -60,13 +60,14 @@ func (c *Client) cliVersion() string {
 // `WorkBuddy/<ver> <brand>/<ver> CLI/<cliVer>`，首段恒为驼峰 `WorkBuddy`，第二段按 realm：
 //
 //	CN 5.8.3     → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0
-//	global 5.8.4 → WorkBuddy/5.8.4 WorkBuddy AI/5.8.4 CLI/2.161.0
+//	global 5.8.4 → WorkBuddy/5.8.4 workbuddy-ai/5.8.4 CLI/2.161.0
 //
-// 官方无 UA 随机化，故默认确定性。
+// 国际版第二段是打包期由 productName `WorkBuddy AI` 改写成的 slug `workbuddy-ai`
+// （双版本真机 chat 抓包）。官方无 UA 随机化，故默认确定性。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
 	platform := "WorkBuddy"
 	if a != nil && a.IsGlobal() {
-		platform = "WorkBuddy AI"
+		platform = "workbuddy-ai"
 	}
 	ver := c.clientVersion(a)
 	return "WorkBuddy/" + ver + " " + platform + "/" + ver + " CLI/" + c.cliVersion()
@@ -80,7 +81,7 @@ func (c *Client) defaultWorkBuddyUA() string {
 // userAgent 返回当前出站 UA（客户端出站路径：chat/refresh/FetchModels）。
 // 优先级：Client.UserAgent（config user_agent）显式覆盖 > 按账号 realm 的默认 WorkBuddy 三段式。
 // 显式覆盖兼容既有覆盖逻辑：用户配了即以用户值为准（自定义品牌/版本），
-// 未配则走官方桌面端默认形态（global 换 `WorkBuddy AI` 平台段）。
+// 未配则走官方桌面端默认形态（global 换 `workbuddy-ai` 平台段）。
 func (c *Client) userAgent(a *auth.Auth) string {
 	if c != nil && c.UserAgent != "" {
 		return c.UserAgent
