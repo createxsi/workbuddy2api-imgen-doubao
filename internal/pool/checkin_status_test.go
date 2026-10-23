@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 )
 
 func TestNoteCheckinDoneMarksToday(t *testing.T) {
@@ -63,8 +64,8 @@ func TestCheckinDoneExpiredYesterday(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
-	raw = []byte(strings.Replace(string(raw), time.Now().Format("2006-01-02"), yesterday, 1))
+	yesterday := cst.Day(time.Now().AddDate(0, 0, -1))
+	raw = []byte(strings.Replace(string(raw), cst.Day(time.Now()), yesterday, 1))
 	if err := os.WriteFile(fp, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
