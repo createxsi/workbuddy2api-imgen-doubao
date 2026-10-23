@@ -156,8 +156,7 @@ func (c *Client) CommonHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("User-Agent", c.userAgent(a))
 	// X-CodeBuddy-Request: 1（官方客户端风控闸门头，所有 API 请求必带，D1）。
 	req.Header.Set("X-CodeBuddy-Request", "1")
-	// Accept-Language 按 realm 切（D5）：CN zh-CN，global en-US。官方客户端按账号域
-	// 发对应语言标识，对齐避免上游风控按语言缺失误判。
+	// Accept-Language 统一 zh（官方客户端跟随系统区域，不按账号域切）。
 	req.Header.Set("Accept-Language", acceptLanguageFor(a))
 	// X-Machine-ID / X-Session-ID：按 uid 稳定派生的账号级设备头（见
 	// injectAccountStableHeaders）。注入在 CommonHeaders——chat 经 ChatHeaders
@@ -165,12 +164,12 @@ func (c *Client) CommonHeaders(req *http.Request, a *auth.Auth) {
 	c.injectAccountStableHeaders(req, a)
 }
 
-// acceptLanguageFor 按账号 realm 返回 Accept-Language：global → en-US，cn → zh-CN。
+// acceptLanguageFor 返回 Accept-Language。
+//
+// 官方客户端这个头不按账号域切，而是跟随操作系统区域；billing 层固定发 `zh`，
+// 国际版账号同样如此。旧实现「global → en-US」与真机不符，统一取 `zh`。
 func acceptLanguageFor(a *auth.Auth) string {
-	if a != nil && a.IsGlobal() {
-		return "en-US"
-	}
-	return "zh-CN"
+	return "zh"
 }
 
 // injectCodeBuddyRequest 在 req 注入 X-CodeBuddy-Request: 1。
