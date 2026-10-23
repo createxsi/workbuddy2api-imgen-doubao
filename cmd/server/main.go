@@ -190,6 +190,8 @@ func main() {
 		GrowthDisabled:     !cfg.Schedule.GrowthEnabled,
 		// 保号类四任务是否覆盖禁用账号（缺省 false = 禁用即跳过，保持既有行为）。
 		IncludeDisabledInTasks: cfg.Schedule.IncludeDisabledInTasks,
+		AccountSpread:          time.Duration(cfg.Schedule.AccountSpreadMinutes) * time.Minute,
+		AccountSpreadMinGap:    time.Duration(cfg.Schedule.AccountSpreadMinGapSeconds) * time.Second,
 	})
 	switch {
 	case !cfg.Schedule.CheckinEnabled:
@@ -518,6 +520,8 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		!newCfg.Schedule.GrowthEnabled)
 	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
+	sch.SetAccountSpread(time.Duration(newCfg.Schedule.AccountSpreadMinutes)*time.Minute,
+		time.Duration(newCfg.Schedule.AccountSpreadMinGapSeconds)*time.Second)
 
 	return restartRequiredFields(newCfg), nil
 }

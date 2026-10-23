@@ -62,6 +62,11 @@ type Config struct {
 	// 待办并执行，与面板「执行全部待办」按钮同管线）。调度器只管时点不管实现——
 	// panel 在 scheduler 之后构造，用 SetGrowthHook 事后挂载；nil 时到点跳过。
 	GrowthHook func()
+
+	// AccountSpread 账号级摊开窗口（schedule.account_spread_minutes，0 = 关闭），见 spread.go。
+	AccountSpread time.Duration
+	// AccountSpreadMinGap 同批两个账号的最小间隔（schedule.account_spread_min_gap_seconds）。
+	AccountSpreadMinGap time.Duration
 }
 
 // Scheduler 调度器。
@@ -102,6 +107,7 @@ func New(cfg Config) *Scheduler {
 	if len(cfg.BlackcatHours) == 0 {
 		cfg.BlackcatHours = []int{23}
 	}
+	cfg.AccountSpread, cfg.AccountSpreadMinGap = clampSpread(cfg.AccountSpread, cfg.AccountSpreadMinGap)
 	return &Scheduler{
 		cfg:           cfg,
 		adoptTried:    make(map[string]string),
@@ -407,15 +413,15 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 			defer wg.Done()
 			switch k {
 			case taskCheckin:
-				s.RunCheckinNow()
+				s.runCheckin(withSpread(ctx, "checkin"))
 			case taskTravel:
-				s.RunTravelNow()
+				s.runTravel(withSpread(ctx, "travel"))
 			case taskActivity:
-				s.runActivity(ctx)
+				s.runActivity(withSpread(ctx, "activity"))
 			case taskKeepalive:
-				s.RunKeepaliveNow()
+				s.runKeepalive(withSpread(ctx, "keepalive"))
 			case taskBlackcat:
-				s.RunBlackcatNow()
+				s.runBlackcat(withSpread(ctx, "blackcat"))
 			case taskGrowth:
 				// 成长任务队列：回调在 panel 侧异步启动（返回不等执行完），nil 未挂载则跳过。
 				s.schedMu.Lock()
@@ -453,9 +459,15 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 // 末尾追加连登管家（streak.go）：可兑换档位自动兑换 + 抽奖次数自动抽完——
 // 连登兑换按天数解锁，挂在每日签到后即「到天数那天自动完成兑换→抽奖闭环」。
 func (s *Scheduler) RunCheckinNow() {
+	s.runCheckin(context.Background())
+}
+
+// runCheckin 签到遍历；排程触发时按账号摊开（见 spread.go）。
+func (s *Scheduler) runCheckin(ctx context.Context) {
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
-	for _, st := range s.cfg.Pool.List() {
+	list, wait := s.accountsFor(ctx)
+	for _, st := range list {
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -468,6 +480,9 @@ func (s *Scheduler) RunCheckinNow() {
 		// 按 CN 处理——这是逃生门的刻意语义（纯 CN 部署锁死一切 global），与引用处一致。
 		if a.IsGlobal() {
 			continue
+		}
+		if !wait(st.UID) {
+			return
 		}
 		// 企业版无签到体系：上游对 POST /v2/billing/meter/daily-checkin 直接
 		// 400 code 10001「企业账号不支持该操作」。跳过签到，但**不 continue**——
@@ -519,7 +534,8 @@ func (s *Scheduler) RunActivityNow() {
 func (s *Scheduler) runActivity(ctx context.Context) {
 	first := true
 	includeDisabled := s.includeDisabledInTasks()
-	for _, st := range s.cfg.Pool.List() {
+	list, wait := s.accountsFor(ctx)
+	for _, st := range list {
 		if st.Disabled && !includeDisabled {
 			continue
 		}
@@ -545,6 +561,9 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 			}
 		}
 		first = false
+		if !wait(st.UID) {
+			return
+		}
 		cid := session.NewConversationID()
 		if err := s.cfg.Upstream.ReportChatActivity(a, cid, ""); err != nil {
 			log.Printf("activity %s: %v", logfmt.Label(a.UID, a.Nickname), err)
@@ -583,14 +602,23 @@ func (s *Scheduler) checkActivityStreak(a *auth.Auth) bool {
 // 连续 sessionDeadThreshold 次（3 次）才禁用（P0-1：13 个 disabled 号全是历史误判）。
 // 刷新成功 → ClearSessionDead 清计数（错误判定的账号有复活路径）。
 func (s *Scheduler) RunKeepaliveNow() {
+	s.runKeepalive(context.Background())
+}
+
+// runKeepalive token 保活遍历；排程触发时按账号摊开（见 spread.go）。
+func (s *Scheduler) runKeepalive(ctx context.Context) {
 	includeDisabled := s.includeDisabledInTasks()
-	for _, st := range s.cfg.Pool.List() {
+	list, wait := s.accountsFor(ctx)
+	for _, st := range list {
 		if st.Disabled && !includeDisabled {
 			continue
 		}
 		a := s.cfg.Pool.AuthByUID(st.UID)
 		if a == nil || a.RefreshTokenValue() == "" {
 			continue
+		}
+		if !wait(st.UID) {
+			return
 		}
 		if err := s.cfg.Upstream.RefreshToken(a); err != nil {
 			log.Printf("keepalive %s: %v", logfmt.Label(st.UID, st.Nickname), err)

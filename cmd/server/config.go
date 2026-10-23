@@ -101,6 +101,12 @@ type Config struct {
 		// 缺省 false = 保持既有行为，对老配置零影响。打开后禁用号仍会签到 / 保活，但
 		// **依旧不参与选号**：pool 选号侧的 disabled 过滤不受本开关影响。
 		IncludeDisabledInTasks bool `json:"include_disabled_in_tasks"`
+		// AccountSpreadMinutes 账号级摊开窗口：0 = 关闭（排程任务对全池连续执行）。
+		// >0 时排程触发的签到 / 旅行 / 活跃上报 / 保活 / 夜猫子把每个账号放在窗口内
+		// 各自的偏移上（按 任务+账号+日期 哈希，当天固定），面板手动触发不受影响。上限 45。
+		AccountSpreadMinutes int `json:"account_spread_minutes"`
+		// AccountSpreadMinGapSeconds 同批两个账号的最小间隔（偏移撞车时把后者推开），0 = 只做随机。
+		AccountSpreadMinGapSeconds int `json:"account_spread_min_gap_seconds"`
 
 		// 余额后台周期刷新：两次签到时点之间 credits 也能保持新鲜（面板/状态观测用）。
 		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。

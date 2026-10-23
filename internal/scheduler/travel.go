@@ -3,6 +3,7 @@
 package scheduler
 
 import (
+	"context"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"log"
 	"time"
@@ -44,8 +45,14 @@ func travelDay(t time.Time) string {
 // 401/查询失败只跳过该账号本轮（不强刷 token，交 22:00 keepalive）；
 // 账号间限速 travelAccountDelay。
 func (s *Scheduler) RunTravelNow() {
+	s.runTravel(context.Background())
+}
+
+// runTravel 旅行遍历；排程触发时按账号摊开（见 spread.go）。
+func (s *Scheduler) runTravel(ctx context.Context) {
 	first := true
-	for _, st := range s.cfg.Pool.List() {
+	list, wait := s.accountsFor(ctx)
+	for _, st := range list {
 		if st.Disabled {
 			continue
 		}
@@ -63,6 +70,9 @@ func (s *Scheduler) RunTravelNow() {
 			time.Sleep(travelAccountDelay)
 		}
 		first = false
+		if !wait(st.UID) {
+			return
+		}
 		s.travelOne(a)
 	}
 }
