@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"path/filepath"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -881,6 +882,39 @@ func TestChatSessionDeadDisables(t *testing.T) {
 	st, _ := p.Status("u1")
 	if !st.Disabled {
 		t.Errorf("account should be disabled: %+v", st)
+	}
+}
+
+// 12153 但 refresh token 仍有效：强制刷新成功后不禁用，只短冷却（换新 token 回池）。
+func TestChatSessionDeadRefreshRecovers(t *testing.T) {
+	dir := t.TempDir()
+	up := &upstream.Client{
+		HTTP: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			body := `{"code":12153,"msg":"Offline user session not found"}`
+			status := 401
+			if strings.Contains(r.URL.Path, "refresh") {
+				status, body = 200, `{"code":0,"data":{"accessToken":"at2","refreshToken":"rt2","expiresIn":3600}}`
+			}
+			return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(body))}, nil
+		})},
+		ChatBaseCN:    "https://fake.example",
+		BillingBaseCN: "https://fake.example",
+	}
+	a := &auth.Auth{UID: "u1", AccessToken: "at1", RefreshToken: "rt1", ExpiresAt: 9999999999, FilePath: filepath.Join(dir, "u1.json")}
+	p := testPoolWith(a)
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	st, _ := p.Status("u1")
+	if st.Disabled {
+		t.Fatalf("refresh succeeded, account must not be disabled: %+v", st)
+	}
+	if !st.Cooling {
+		t.Errorf("expected short cooldown after refresh: %+v", st)
+	}
+	if a.AccessTokenValue() != "at2" {
+		t.Errorf("access token = %q, want refreshed at2", a.AccessTokenValue())
 	}
 }
 

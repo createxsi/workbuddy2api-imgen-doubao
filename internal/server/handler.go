@@ -1440,7 +1440,8 @@ func isUpstreamTimeout(err error, clientGone bool) bool {
 //     起 · softStreak 指数、封顶 soft_rate_max 的既有 CooldownSoftRate 有界退避。
 //     基数经 jitterDur 抖动（防多账号同相位冷却到期再聚团）。
 //   - ErrNotFound → Cooldown(CoolSoft, notFoundCooldown 固定 60s)：短冷却防雪崩。
-//   - ErrSessionDead → Disable：session 死亡，永久禁用（需人工重登）。
+//   - ErrSessionDead → handleSessionDead：先强制刷新一次 token，成功则短冷却放回；
+//     刷新失败才禁用（需人工重登）。
 //   - ErrContentBlocked → 不罚账号；passthrough 首遇触发降级重试，最终仍拦则回 400。
 //   - ErrBadParams → 不罚账号，且与 ErrPromptTooLong/ErrImageInvalid 同待遇：
 //     调用方在轮转循环内即刻 400 透传原文终止（换号必然同样失败）。
@@ -1513,7 +1514,7 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		}
 		h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "waf 403 block")
 	case upstream.ErrSessionDead:
-		h.cfg.Pool.Disable(uid, "12153 session dead")
+		h.handleSessionDead(uid)
 	case upstream.ErrNotFound:
 		// 404 短冷却（软冷却），防雪崩。固定 notFoundCooldown，不随 soft_rate 退避：
 		// 偶发路径缺失不是限流信号，不该按限流惩罚升级。
@@ -1675,4 +1676,32 @@ func (h *Handler) hintOf(kind upstream.ErrKind, body, bareModel string, hasImage
 		msg = uerr.Msg
 	}
 	return upstream.GatewayHint(kind, msg, h.hintContext(bareModel, hasImage))
+}
+
+// sessionDeadRefreshedCooldown chat 撞 12153 后强制刷新成功时的短冷却（给新 token 一点生效时间）。
+const sessionDeadRefreshedCooldown = 30 * time.Second
+
+// handleSessionDead chat 路径的 12153 处置。
+//
+// 12153（offline session not found）在上游作废 access token、但 refresh token 仍有效时
+// 也会出现；一次即禁用会把还能续命的号打成「已禁用」，只能人工重登。这里先强制
+// 刷新一次（refresh 已按 RT 单飞，并发请求不会重复刷新）：
+//   - 刷新成功 → 清连续计数、落盘、短冷却后回池；
+//   - 无 refresh token 或刷新失败 → 禁用（refresh 也救不活，只能重登）。
+func (h *Handler) handleSessionDead(uid string) {
+	a := h.cfg.Pool.AuthByUID(uid)
+	if a != nil && a.RefreshTokenValue() != "" {
+		if err := h.cfg.Upstream.RefreshToken(a); err == nil {
+			if err := a.SaveAtomic(); err != nil {
+				log.Printf("ERR: [server] 12153 refresh acct=%s: save auth failed: %v", logfmt.Label(a.UID, a.Nickname), err)
+			}
+			h.cfg.Pool.ClearSessionDead(uid)
+			h.cfg.Pool.Cooldown(uid, pool.CoolSoft, sessionDeadRefreshedCooldown, "12153 → token refreshed")
+			log.Printf("WARN: [server] acct=%s: 12153 session dead，强制刷新成功，短冷却后回池", logfmt.Label(a.UID, a.Nickname))
+			return
+		} else {
+			log.Printf("WARN: [server] acct=%s: 12153 session dead，强制刷新失败: %v", logfmt.Label(a.UID, a.Nickname), err)
+		}
+	}
+	h.cfg.Pool.Disable(uid, "12153 session dead")
 }
