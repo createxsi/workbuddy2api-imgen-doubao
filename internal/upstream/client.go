@@ -1572,6 +1572,11 @@ func (c *Client) fetchV3Models(a *auth.Auth) ([]ModelInfo, error) {
 // discount 只在部分条目上存在：有 factor 的可算生效价；「错峰使用」类只有时段
 // 文案（factor 藏在 hover 文本里，无机器可读值），仅透出标签与说明。
 type v3ModelPromotion struct {
+	// ID / Name / Tags：优惠数组里还夹着**纯模型定义**（只有 id/name/tags，没有
+	// kind/discount）。国际版的出图模型 hy-image-3.5 只出现在这里，data.models 里没有。
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Tags     []string `json:"tags"`
 	Enabled  bool     `json:"enabled"`
 	Priority int      `json:"priority"`
 	ModelIDs []string `json:"modelIds"`
@@ -1915,6 +1920,18 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 	// 倍率，如 hy4-preview-f 的 x0.29），而 WorkBuddy 客户端显示的是生效价（试用/
 	// 折扣窗口内 factor 打折）——面板据此展示「生效价 + 标签 + 牌价」。
 	applyModelPromotions(out, env.Data.ModelPromotions)
+	// 优惠数组里内嵌的生成类模型定义补进目录（只补 tags 命中生图/生视频的，其它形态不猜）；
+	// nonChatModel 照旧把它们挡在对话目录之外，FetchGenerationModels 据此单列。
+	for _, pr := range env.Data.ModelPromotions {
+		id := strings.TrimSpace(pr.ID)
+		if id == "" || !IsGenerationModel(pr.Tags) {
+			continue
+		}
+		if _, exists := out[id]; exists {
+			continue
+		}
+		out[id] = ModelInfo{ID: id, Name: pr.Name, Tags: pr.Tags}
+	}
 
 	if len(out) == 0 {
 		return nil, fmt.Errorf("v3/config returned empty models")

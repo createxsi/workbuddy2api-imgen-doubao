@@ -188,7 +188,7 @@ func (h *Handler) runImage(
 
 // imagesGenerations 入站（OpenAI 兼容）：
 //
-//	{"model":"gpt-image-2.5-sunburst","prompt":"...","size":"1024x1536","quality":"high"}
+//	{"model":"hy-image-3.5","prompt":"...","size":"1024x1536","quality":"high"}
 //
 // 出站响应（OpenAI 兼容）：
 //
@@ -211,7 +211,7 @@ func (h *Handler) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 
 	realm, bareModel := h.resolveImageRealm(in.Model)
 	if bareModel == "" {
-		// 按 realm 选默认模型：global → gpt-image-2.5-sunburst；cn → hunyuan-image-v3.0。
+		// 按 realm 选默认模型：global → hy-image-3.5；cn → hunyuan-image-alpha。
 		bareModel = upstream.DefaultTextToImageModelFor(realm)
 	}
 	upstreamBody, err := upstream.BuildImageUpstreamBody(&in, bareModel)
@@ -330,7 +330,7 @@ func (h *Handler) imagesEdits(w http.ResponseWriter, r *http.Request) {
 
 	realm, bareModel := h.resolveImageRealm(in.Model)
 	if bareModel == "" {
-		// 按 realm 选默认模型：global → gpt-image-2.5-sunburst；cn → hunyuan-image-v2.0-general-edit。
+		// 按 realm 选默认模型：global → hy-image-3.5；cn → hunyuan-image-alpha-edit。
 		bareModel = upstream.DefaultImageToImageModelFor(realm)
 	}
 	upstreamBody, err := upstream.BuildImageEditUpstreamBody(&in, bareModel, images)
@@ -469,16 +469,23 @@ func generationModelEntry(id string, mi upstream.ModelInfo) map[string]any {
 	return entry
 }
 
-// generationModelStaticFallback 探测全失败时的静态兜底清单（2026-10-09 实测值）。
+// generationModelStaticFallback 探测全失败时的静态兜底清单。
 // 只列模型名与能力标签——生图端点不读目录，指定模型名即可正常调用。
 func generationModelStaticFallback() []map[string]any {
 	return []map[string]any{
 		{
-			"id": "global:gpt-image-2.5-sunburst", "object": "model", "created": 1753600000,
+			"id": "global:hy-image-3.5", "object": "model", "created": 1753600000,
 			"owned_by": "workbuddy", "generation_model": true,
-			"name":      "GPT-Image-2.5-Sunburst",
-			"tags":      []string{"text-to-image", "image-to-image"},
-			"endpoints": []string{"POST /v1/images/generations", "POST /v1/images/edits"},
+			"name":      "HY Image 3.5",
+			"tags":      []string{"text-to-image"},
+			"endpoints": []string{"POST /v1/images/generations"},
+		},
+		{
+			"id": "cn:hunyuan-image-alpha-edit", "object": "model", "created": 1753600000,
+			"owned_by": "workbuddy", "generation_model": true,
+			"name":      "Hunyuan Image Alpha Edit",
+			"tags":      []string{"image-to-image"},
+			"endpoints": []string{"POST /v1/images/edits"},
 		},
 		{
 			"id": "cn:hunyuan-image-alpha", "object": "model", "created": 1753600000,

@@ -40,16 +40,16 @@ const (
 	// imagesEditsPath 图片编辑路径（图生图，与 generations 同域不同路径）。
 	imagesEditsPath = "/v2/images/edits"
 
-	// DefaultTextToImageModel 文本生图模型兜底默认值。
-	// 取值依据：本机海外版运行时配置 acc-product-config-v3.json 中
-	// tags=["text-to-image","image-to-image"] 的 gpt-image-2.5-sunburst。
-	DefaultTextToImageModel = "gpt-image-2.5-sunburst"
+	// DefaultTextToImageModel 国际版文本生图默认模型。
+	//
+	// 原默认 gpt-image-2.5-sunburst 已下架（同类项目 2026-10-22 实测 400 code=14401
+	// route config not found）；国际版当前可用的出图模型是 hy-image-3.5（只出现在
+	// /v3/config 的 modelPromotions 里，实测 200，每张约 0.27 credit）。
+	DefaultTextToImageModel = "hy-image-3.5"
 
-	// DefaultImageToImageModel 图片编辑（图生图）模型兜底默认值。
-	// 与 DefaultTextToImageModel 同值：该模型同时带 text-to-image 与 image-to-image
-	// 两个 tag，是海外版运行时配置里唯一的 image-to-image 命中项。
-	// （CN 域的对应模型是 hunyuan-image-alpha-edit，见下方 CN 常量。）
-	DefaultImageToImageModel = "gpt-image-2.5-sunburst"
+	// DefaultImageToImageModel 国际版图生图默认模型。sunburst 下架后国际版没有实测
+	// 可用的图生图模型，先与文生图同值；需要稳定图生图请用 cn:hunyuan-image-alpha-edit。
+	DefaultImageToImageModel = "hy-image-3.5"
 
 	// DefaultTextToImageModelCN / DefaultImageToImageModelCN CN 域默认生图模型。
 	//
@@ -95,7 +95,7 @@ type ImageGenRequest struct {
 }
 
 // DefaultTextToImageModelFor 按 realm 返回文本生图的默认模型：
-// global → gpt-image-2.5-sunburst（海外版目录）；cn → hunyuan-image-v3.0（CN 目录）。
+// global → hy-image-3.5；cn → hunyuan-image-alpha。
 // 空/未知 realm 按 global 处理（与 imageDefaultRealm 缺省一致）。
 func DefaultTextToImageModelFor(realm string) string {
 	if realm == "cn" {
@@ -654,6 +654,13 @@ func IsGenerationModel(tags []string) bool {
 	return false
 }
 
+// imageDeadModels 上游已下架、没有路由的出图模型：列出来只会让客户端选到一个必然
+// 400 的模型。gpt-image-2.5-sunburst：400 code=14401 route config not found
+// （同类项目 2026-10-22 实测）。模型恢复时删一行即可；未知模型照旧列出。
+var imageDeadModels = map[string]bool{
+	"gpt-image-2.5-sunburst": true,
+}
+
 // FetchGenerationModels 独立探测**生成类模型**目录（生图/生视频）。
 //
 // 为什么不能复用 FetchModels：后者按 nonChatModel 规则把生成类模型剔除，所以
@@ -674,7 +681,7 @@ func (c *Client) FetchGenerationModels(a *auth.Auth) ([]ModelInfo, error) {
 			continue
 		}
 		for id, mi := range m {
-			if _, seen := byID[id]; !seen && IsGenerationModel(mi.Tags) {
+			if _, seen := byID[id]; !seen && IsGenerationModel(mi.Tags) && !imageDeadModels[id] {
 				byID[id] = mi
 			}
 		}

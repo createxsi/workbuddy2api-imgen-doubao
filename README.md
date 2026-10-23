@@ -973,9 +973,9 @@ curl http://127.0.0.1:7863/v1/images/models -H "Authorization: Bearer $API_KEY"
 
 ```json
 {"object":"list","data":[
-  {"id":"global:gpt-image-2.5-sunburst","name":"GPT-Image-2.5-Sunburst",
-   "tags":["text-to-image","image-to-image"],"generation_model":true,
-   "endpoints":["POST /v1/images/generations","POST /v1/images/edits"]},
+  {"id":"global:hy-image-3.5","name":"HY Image 3.5",
+   "tags":["text-to-image"],"generation_model":true,
+   "endpoints":["POST /v1/images/generations"]},
   {"id":"cn:hunyuan-image-alpha","name":"Hunyuan Image Alpha",
    "tags":["text-to-image"],"generation_model":true,
    "endpoints":["POST /v1/images/generations"]}
@@ -985,16 +985,18 @@ curl http://127.0.0.1:7863/v1/images/models -H "Authorization: Bearer $API_KEY"
 > 若某次探测全部失败（无可用账号 / 网络异常），该端点会回落到一个内置静态清单，
 > 至少保证客户端拿得到可用模型名——因为**生图端点本身不读目录，直接指定模型名即可调用**。
 
-### 两站可用模型（2026-10-09 实测）
+### 两站可用模型（2026-10 更新）
 
 | 站 | 模型 ID | 名称 | 能力 | 可用端点 |
 |---|---|---|---|---|
-| **国际**（global） | `global:gpt-image-2.5-sunburst` | GPT-Image-2.5-Sunburst | 文生图 + **图生图** | generations / edits |
+| **国际**（global） | `global:hy-image-3.5` | HY Image 3.5 | 文生图（每张约 0.27 credit） | generations |
 | **CN** | `cn:hunyuan-image-alpha` | Hunyuan Image Alpha | 文生图 | generations |
 | **CN** | `cn:hunyuan-image-alpha-edit` | — | **图生图** | edits |
 
 要点：
-- **要做图生图，优先用 `global:gpt-image-2.5-sunburst`**（国际站模型同时带两个 tag）。
+- `global:gpt-image-2.5-sunburst` **已下架**（上游 400 `code=14401 route config not found`），列表里已剔除。
+- `global:hy-image-3.5` 不在上游 `models` 目录里，只出现在 `modelPromotions`，网关已补入列表。
+- **图生图请用 `cn:hunyuan-image-alpha-edit`**：国际站目前没有确认可用的图生图模型。
 - CN 的两个模型中，`hunyuan-image-alpha-edit` **只在桌面端 UA 探测的目录里出现**，
   常规 IDE UA 探测（21 条）不含它，所以它可能不在 `/v1/images/models` 列表里。
   但**直接指定模型名调用依然有效**——端点不校验目录。
@@ -1005,12 +1007,12 @@ curl http://127.0.0.1:7863/v1/images/models -H "Authorization: Bearer $API_KEY"
 # 文生图
 curl -X POST http://127.0.0.1:7863/v1/images/generations \
   -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d '{"model":"global:gpt-image-2.5-sunburst","prompt":"一只橘猫坐在窗台上","size":"1024x1024"}'
+  -d '{"model":"global:hy-image-3.5","prompt":"一只橘猫坐在窗台上","size":"1024x1024"}'
 
 # 图生图（JSON 入站；image 支持 data URL / http(s) URL / 裸 base64 / 本地文件路径）
 curl -X POST http://127.0.0.1:7863/v1/images/edits \
   -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
-  -d '{"model":"global:gpt-image-2.5-sunburst","prompt":"改成水彩画","image":["D:\\in.png"]}'
+  -d '{"model":"cn:hunyuan-image-alpha-edit","prompt":"改成水彩画","image":["D:\\in.png"]}'
 
 # 图生图（multipart 入站，OpenAI 标准形态）
 curl -X POST http://127.0.0.1:7863/v1/images/edits \
@@ -1031,7 +1033,7 @@ curl http://127.0.0.1:7863/v1/images/models -H "Authorization: Bearer $API_KEY"
   ```
   注意字段名是驼峰 `requestId`。
 - **realm 路由**复用 chat 的 `global:` / `cn:` 前缀协议；无前缀默认 `global`，池内无 global 可服务号时回退 `cn`。默认模型按 realm 区分：
-  - `global` → `gpt-image-2.5-sunburst`（文生图 + 图生图）
+  - `global` → `hy-image-3.5`（文生图；图生图未确认可用）
   - `cn` → `hunyuan-image-alpha`（文生图）/ `hunyuan-image-alpha-edit`（图生图）
 
   这些 CN 模型在 `/v1/models` 里可能不出现（上游按 UA 下发不同目录），但**生图端点不看列表，直接指定模型名即可调用**。

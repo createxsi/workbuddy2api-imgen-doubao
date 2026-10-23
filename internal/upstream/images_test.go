@@ -323,9 +323,9 @@ func TestGenerationTagsAlsoNonChat(t *testing.T) {
 	}
 }
 
-// 按 realm 的默认生图模型（CN 用 hunyuan 系列，global 用 gpt-image）。
+// 按 realm 的默认生图模型（CN 用 hunyuan 系列，global 用 hy-image-3.5）。
 func TestDefaultModelsForRealm(t *testing.T) {
-	if got := DefaultTextToImageModelFor("global"); got != "gpt-image-2.5-sunburst" {
+	if got := DefaultTextToImageModelFor("global"); got != "hy-image-3.5" {
 		t.Errorf("global text2img=%q", got)
 	}
 	if got := DefaultTextToImageModelFor("cn"); got != "hunyuan-image-alpha" {
@@ -334,11 +334,11 @@ func TestDefaultModelsForRealm(t *testing.T) {
 	if got := DefaultImageToImageModelFor("cn"); got != "hunyuan-image-alpha-edit" {
 		t.Errorf("cn img2img=%q", got)
 	}
-	if got := DefaultImageToImageModelFor("global"); got != "gpt-image-2.5-sunburst" {
+	if got := DefaultImageToImageModelFor("global"); got != "hy-image-3.5" {
 		t.Errorf("global img2img=%q", got)
 	}
 	// 空/未知 realm 按 global 处理。
-	if got := DefaultTextToImageModelFor(""); got != "gpt-image-2.5-sunburst" {
+	if got := DefaultTextToImageModelFor(""); got != "hy-image-3.5" {
 		t.Errorf("空 realm=%q", got)
 	}
 }
@@ -544,7 +544,7 @@ func TestFetchGenerationModelsFallsBackAcrossUAs(t *testing.T) {
 		uas = append(uas, ua)
 		if ua == codeBuddyIDEUA {
 			return jsonResp(200, `{"code":0,"data":{"models":[
-				{"id":"gpt-image-2.5-sunburst","name":"GPT-Image-2.5-Sunburst","tags":["text-to-image","image-to-image"]},
+				{"id":"seedance-2.5","name":"Seedance","tags":["text-to-video"]},
 				{"id":"hy3","name":"HY3"}
 			]}}`), nil
 		}
@@ -555,10 +555,31 @@ func TestFetchGenerationModelsFallsBackAcrossUAs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchGenerationModels: %v", err)
 	}
-	if len(infos) != 1 || infos[0].ID != "gpt-image-2.5-sunburst" {
+	if len(infos) != 1 || infos[0].ID != "seedance-2.5" {
 		t.Fatalf("infos=%+v", infos)
 	}
 	if len(uas) < 2 {
 		t.Fatalf("expected multi-UA probe, got %v", uas)
+	}
+}
+
+// 国际版出图模型只在 modelPromotions 里以纯模型定义出现：须补入；已下架的 sunburst 须剔除。
+func TestFetchGenerationModelsFromPromotionsAndDropsDead(t *testing.T) {
+	c := testClient(func(r *http.Request) (*http.Response, error) {
+		return jsonResp(200, `{"code":0,"data":{"models":[
+			{"id":"gpt-image-2.5-sunburst","name":"GPT-Image-2.5-Sunburst","tags":["text-to-image","image-to-image"]},
+			{"id":"hy3","name":"HY3"}
+		],"modelPromotions":[
+			{"id":"hy-image-3.5","name":"HY Image 3.5","tags":["text-to-image"]},
+			{"id":"offpeak","enabled":true,"modelIds":["hy3"]}
+		]}}`), nil
+	})
+	a := &auth.Auth{AccessToken: "at", UID: "u1", Domain: "www.workbuddy.ai"}
+	infos, err := c.FetchGenerationModels(a)
+	if err != nil {
+		t.Fatalf("FetchGenerationModels: %v", err)
+	}
+	if len(infos) != 1 || infos[0].ID != "hy-image-3.5" {
+		t.Fatalf("infos=%+v", infos)
 	}
 }
