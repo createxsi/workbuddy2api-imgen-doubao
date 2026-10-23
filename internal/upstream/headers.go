@@ -13,13 +13,15 @@ import (
 )
 
 const (
-	// defaultClientVersion 出站 WorkBuddy 客户端版本段（UA 的 `WorkBuddy/<ver>` 与
-	// 白名单头组的 X-IDE-Version）。对齐官方 WorkBuddy Desktop 分发包版本（5.5.4）。
-	// config upstream.client_version 可覆盖（空 = 内置默认）。
-	defaultClientVersion = "5.5.4"
-	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本。对齐官方内置 CLI（2.137.1）。
+	// defaultClientVersionCN / defaultClientVersionGlobal 出站 WorkBuddy 客户端版本段
+	// （UA 的 `<brand>/<ver>` 与 X-IDE-Version）。按 realm 分开：国内版分发包 5.8.3、
+	// 国际版分发包 5.8.4，两版发版节奏不同。对话与生图共用同一取值。
+	// config upstream.client_version 可覆盖（空 = 按 realm 取内置默认）。
+	defaultClientVersionCN     = "5.8.3"
+	defaultClientVersionGlobal = "5.8.4"
+	// defaultCliVersion 出站 UA 中 `CLI/<ver>` 段版本，两版分发包内置同一 CLI（2.161.0）。
 	// config upstream.cli_version 可覆盖（空 = 内置默认）。
-	defaultCliVersion = "2.137.1"
+	defaultCliVersion = "2.161.0"
 
 	originRefererCN     = "https://www.codebuddy.cn"
 	originRefererGlobal = "https://www.workbuddy.ai"
@@ -35,12 +37,15 @@ func originRefererFor(a *auth.Auth) string {
 }
 
 // clientVersion 生效的 WorkBuddy 客户端版本：Client.ClientVersion 非空则取之，
-// 否则内置默认 defaultClientVersion。
-func (c *Client) clientVersion() string {
+// 否则按 realm 取内置默认（CN 5.8.3 / global 5.8.4）。
+func (c *Client) clientVersion(a *auth.Auth) string {
 	if c != nil && c.ClientVersion != "" {
 		return c.ClientVersion
 	}
-	return defaultClientVersion
+	if a != nil && a.IsGlobal() {
+		return defaultClientVersionGlobal
+	}
+	return defaultClientVersionCN
 }
 
 // cliVersion 生效的 CLI 版本：Client.CliVersion 非空则取之，否则内置默认 defaultCliVersion。
@@ -51,19 +56,20 @@ func (c *Client) cliVersion() string {
 	return defaultCliVersion
 }
 
-// defaultWorkBuddyUAFor 组装默认客户端出站 UA（官方桌面端 RestOperations 层形状）：
-// `WorkBuddy/<clientVersion> <platform>/<clientVersion> CLI/<cliVersion>`。
-// 平台段（第二段）品牌按 realm 切换——CN 用 applicationName 同值 `WorkBuddy`，
-// global 用官方国际版 productName `WorkBuddy AI`（intl 项目逆向证据：
-// `WorkBuddy/5.5.2 WorkBuddy AI/5.5.2 CLI/5.5.2`）。
-// global 账号送错平台段（`WorkBuddy` 非 `WorkBuddy AI`）可能触发上游 403 code 11140
-// "request illegal" 风控。官方无任何 UA 随机化，故默认确定性。
+// defaultWorkBuddyUAFor 组装默认客户端出站 UA（官方 chat 走 OpenAI SDK 的 buildUserAgent）：
+// `WorkBuddy/<ver> <brand>/<ver> CLI/<cliVer>`，首段恒为驼峰 `WorkBuddy`，第二段按 realm：
+//
+//	CN 5.8.3     → WorkBuddy/5.8.3 WorkBuddy/5.8.3 CLI/2.161.0
+//	global 5.8.4 → WorkBuddy/5.8.4 WorkBuddy AI/5.8.4 CLI/2.161.0
+//
+// 官方无 UA 随机化，故默认确定性。
 func (c *Client) defaultWorkBuddyUAFor(a *auth.Auth) string {
 	platform := "WorkBuddy"
 	if a != nil && a.IsGlobal() {
 		platform = "WorkBuddy AI"
 	}
-	return "WorkBuddy/" + c.clientVersion() + " " + platform + "/" + c.clientVersion() + " CLI/" + c.cliVersion()
+	ver := c.clientVersion(a)
+	return "WorkBuddy/" + ver + " " + platform + "/" + ver + " CLI/" + c.cliVersion()
 }
 
 // defaultWorkBuddyUA 返回 CN 形态的默认 UA（默认账号形态即 CN，零回归兼容既有调用/测试）。
@@ -85,11 +91,11 @@ func (c *Client) userAgent(a *auth.Auth) string {
 // billingUA 白名单类（billing/checkin/banner）出站 UA：单段 `WorkBuddy/<clientVersion>`
 // （官方 banner 显式覆写形态，不带 CLI 段）。默认生效（伪造官方桌面端指纹）；
 // 显式 client_name="SaaS" 才不设 UA（还原旧行为，Go 默认 UA）。
-func (c *Client) billingUA() string {
+func (c *Client) billingUA(a *auth.Auth) string {
 	if c == nil || c.attributionClientName() == "SaaS" {
 		return ""
 	}
-	return "WorkBuddy/" + c.clientVersion()
+	return "WorkBuddy/" + c.clientVersion(a)
 }
 
 // resolveDeviceToken 解析本次请求的 X-Device-Token 取值。
@@ -240,7 +246,7 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 		c.injectGlobalChatHeaders(req, a)
 	}
 	// 用量归属头：默认伪造 WorkBuddy 桌面端指纹（client_name="SaaS" 还原旧行为）。
-	c.injectAttribution(req)
+	c.injectAttribution(req, a)
 	// 客户端 IP 透传（仅 PassthroughIP=true 且本次请求带 IP）。
 	c.injectClientIP(req, clientIP)
 	// 设备风控头：auth 每号 > config 全局 > 文件兜底；空则不注入。
@@ -409,7 +415,7 @@ func (c *Client) attributionClientName() string {
 //
 // 旧实现让 X-Product 也取客户端名（=WorkBuddy），于是同一个头官方发 SaaS、网关发 WorkBuddy
 // ——「同名不同值」比多一个头更容易被规则命中。X-IDE-* 才是承载产品名的地方。
-func (c *Client) injectAttribution(req *http.Request) {
+func (c *Client) injectAttribution(req *http.Request, a *auth.Auth) {
 	name := c.attributionClientName()
 	// X-Product 是 SKU 段，恒 SaaS：官方两版实测都不是产品名。
 	req.Header.Set("X-Product", "SaaS")
@@ -420,7 +426,7 @@ func (c *Client) injectAttribution(req *http.Request) {
 	req.Header.Set("X-Agent-Purpose", "conversation")
 	req.Header.Set("X-IDE-Name", name)
 	req.Header.Set("X-IDE-Type", name)
-	req.Header.Set("X-IDE-Version", c.clientVersion())
+	req.Header.Set("X-IDE-Version", c.clientVersion(a))
 }
 
 // injectClientIP 在 PassthroughIP 开启时把 clientIP 参数透传给上游（三等价头）。
@@ -465,7 +471,7 @@ func (c *Client) BillingHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Accept-Language", acceptLanguageFor(a))
 	if c != nil && c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
-	} else if ua := c.billingUA(); ua != "" {
+	} else if ua := c.billingUA(a); ua != "" {
 		req.Header.Set("User-Agent", ua)
 	}
 	if a.UID != "" {

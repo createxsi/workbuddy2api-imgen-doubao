@@ -208,7 +208,7 @@ func (c *Client) ImageHeaders(req *http.Request, a *auth.Auth, clientIP string) 
 	} else {
 		c.injectGlobalChatHeaders(req, a)
 	}
-	c.injectAttribution(req)
+	c.injectAttribution(req, a)
 	c.injectClientIP(req, clientIP)
 	c.injectDeviceToken(req, a)
 	// 会话头族（对话/请求/消息/B3）：上游后台按 X-Conversation-Request-ID 聚合，
@@ -654,11 +654,21 @@ func IsGenerationModel(tags []string) bool {
 	return false
 }
 
-// imageDeadModels 上游已下架、没有路由的出图模型：列出来只会让客户端选到一个必然
-// 400 的模型。gpt-image-2.5-sunburst：400 code=14401 route config not found
-// （同类项目 2026-10-22 实测）。模型恢复时删一行即可；未知模型照旧列出。
-var imageDeadModels = map[string]bool{
-	"gpt-image-2.5-sunburst": true,
+// imageDeadModels 按 realm 列出上游已下架、没有路由的出图模型：列出来只会让客户端
+// 选到一个必然 400 的模型。global gpt-image-2.5-sunburst：400 code=14401 route config
+// not found（同类项目 2026-10-22 实测）；同名模型在 cn 域仍可调用，故不能跨域屏蔽。
+// 模型恢复时删一行即可；未知模型照旧列出。
+var imageDeadModels = map[string]map[string]bool{
+	"global": {"gpt-image-2.5-sunburst": true},
+}
+
+// imageModelDead 报告 id 在账号所属 realm 下是否已下架。
+func imageModelDead(a *auth.Auth, id string) bool {
+	realm := "cn"
+	if a != nil && a.IsGlobal() {
+		realm = "global"
+	}
+	return imageDeadModels[realm][id]
 }
 
 // FetchGenerationModels 独立探测**生成类模型**目录（生图/生视频）。
@@ -681,7 +691,7 @@ func (c *Client) FetchGenerationModels(a *auth.Auth) ([]ModelInfo, error) {
 			continue
 		}
 		for id, mi := range m {
-			if _, seen := byID[id]; !seen && IsGenerationModel(mi.Tags) && !imageDeadModels[id] {
+			if _, seen := byID[id]; !seen && IsGenerationModel(mi.Tags) && !imageModelDead(a, id) {
 				byID[id] = mi
 			}
 		}

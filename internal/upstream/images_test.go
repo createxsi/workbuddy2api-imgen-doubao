@@ -583,3 +583,42 @@ func TestFetchGenerationModelsFromPromotionsAndDropsDead(t *testing.T) {
 		t.Fatalf("infos=%+v", infos)
 	}
 }
+
+// sunburst 只在 global 下架：cn 域同名模型仍可调用，不得被过滤。
+func TestImageModelDeadPerRealm(t *testing.T) {
+	g := &auth.Auth{UID: "u1", Domain: "www.workbuddy.ai"}
+	g.BackfillRealm()
+	cn := &auth.Auth{UID: "u2"}
+	cn.BackfillRealm()
+	if !imageModelDead(g, "gpt-image-2.5-sunburst") {
+		t.Error("global sunburst should be filtered")
+	}
+	if imageModelDead(cn, "gpt-image-2.5-sunburst") {
+		t.Error("cn sunburst must stay listed")
+	}
+}
+
+// 生图与对话共用按 realm 的版本号。
+func TestImageHeadersVersionMatchesChat(t *testing.T) {
+	c := New()
+	for _, a := range []*auth.Auth{{UID: "u1", Domain: "www.workbuddy.ai"}, {UID: "u2"}} {
+		a.BackfillRealm()
+		img, _ := http.NewRequest("POST", "http://x/v2/images/generations", nil)
+		c.ImageHeaders(img, a, "")
+		want := c.defaultWorkBuddyUAFor(a)
+		if got := img.Header.Get("User-Agent"); got != want {
+			t.Errorf("image UA = %q want chat UA %q", got, want)
+		}
+		if got := img.Header.Get("X-IDE-Version"); got != c.clientVersion(a) {
+			t.Errorf("image X-IDE-Version = %q want %q", got, c.clientVersion(a))
+		}
+	}
+	g := &auth.Auth{UID: "g", Domain: "www.workbuddy.ai"}
+	g.BackfillRealm()
+	if v := c.clientVersion(g); v != "5.8.4" {
+		t.Errorf("global version = %s want 5.8.4", v)
+	}
+	if v := c.clientVersion(&auth.Auth{UID: "c"}); v != "5.8.3" {
+		t.Errorf("cn version = %s want 5.8.3", v)
+	}
+}
