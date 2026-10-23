@@ -5,7 +5,7 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"fmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -545,7 +545,7 @@ func (s *Scheduler) runActivity(ctx context.Context) {
 			}
 		}
 		first = false
-		cid := fmt.Sprintf("wb2api-%d", time.Now().UnixMilli())
+		cid := session.NewConversationID()
 		if err := s.cfg.Upstream.ReportChatActivity(a, cid, ""); err != nil {
 			log.Printf("activity %s: %v", logfmt.Label(a.UID, a.Nickname), err)
 			continue
