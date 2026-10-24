@@ -141,6 +141,11 @@ func TestIsModelRateLimit(t *testing.T) {
 		// 14003：模型繁忙，同样只停该模型（国际版线上高频形态）。
 		{`{"code":14003,"msg":"too many requests","displayMsg":{"zh":"模型繁忙，请换模型或稍后重试"}}`, true},
 		{`{"code": "14003"}`, true},
+		// 6000：上游新码，文案带「切换其他模型」才按模型级（2026-10-24 kimi 实测）。
+		{`{"code":6000,"msg":"您的使用量已超出频率限制，将在 2026-10-24 19:25:18 UTC+8 重置，您也可以切换其他模型继续使用。"}`, true},
+		{`{"code": 6000, "msg":"您也可以切换其他模型继续使用"}`, true},
+		// 6000 但无换模型提示：账号级，不能放宽成模型级。
+		{`{"code":6000,"msg":"账号并发超限"}`, false},
 		// 其他 code（非模型级限流）→ 不算。
 		{`{"code":11140,"msg":"The model provider is rate-limiting requests."}`, false},
 		{`{"code":1,"msg":"429 rate limit"}`, false},
