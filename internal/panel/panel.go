@@ -168,6 +168,7 @@ func (p *Panel) routes() {
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/resume", p.withAuth(p.accountResume))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/checkin", p.withAuth(p.accountCheckin))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/balance", p.withAuth(p.accountBalance))
+	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/refresh", p.withAuth(p.accountRefresh))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/remove", p.withAuth(p.accountRemove))
 	p.mux.HandleFunc("GET /panel/api/accounts/{uid}/tasks", p.withAuth(p.accountTasks))
 	p.mux.HandleFunc("POST /panel/api/accounts/{uid}/tasks/accept", p.withAuth(p.accountTaskAccept))
@@ -509,6 +510,39 @@ func (p *Panel) accountRevive(w http.ResponseWriter, r *http.Request) {
 	p.cfg.Pool.Revive(uid)
 	log.Printf("panel: revive uid=%s（人工清除禁用/冷却/熔断）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// accountRefresh 手动刷新单号 token（12153 / 网关 401 掉线后的人工自救）：强制 refresh
+// 并落盘，成功则清连续 12153 计数。不改禁用/冷却状态——确认可用后再点「解冻」。
+func (p *Panel) accountRefresh(w http.ResponseWriter, r *http.Request) {
+	uid := r.PathValue("uid")
+	a := p.cfg.Pool.AuthByUID(uid)
+	if a == nil {
+		writeErr(w, http.StatusNotFound, "account not found")
+		return
+	}
+	if a.RefreshTokenValue() == "" {
+		writeErr(w, http.StatusBadRequest, "该账号没有 refresh token，只能重新登录")
+		return
+	}
+	if err := p.cfg.Upstream.RefreshToken(a); err != nil {
+		msg := "刷新失败：" + err.Error()
+		if upstream.RefreshRejected(err) {
+			msg += "（上游拒绝，需重新登录）"
+		}
+		writeErr(w, http.StatusBadGateway, msg)
+		return
+	}
+	if err := a.SaveAtomic(); err != nil {
+		writeErr(w, http.StatusInternalServerError, "刷新成功但落盘失败："+err.Error())
+		return
+	}
+	p.cfg.Pool.ClearSessionDead(uid)
+	log.Printf("panel: refresh token uid=%s", uid)
+	a.Lock()
+	exp := a.ExpiresAt
+	a.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "expires_at": exp})
 }
 
 // modelLocksUnlock 人工打开模型锁池：清除 (账号, 模型) 级冷却（14003 繁忙 / 6004 限流 /

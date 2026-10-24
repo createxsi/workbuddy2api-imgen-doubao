@@ -453,6 +453,7 @@ function renderAccounts(list) {
         (s.enterprise ? '' :
           '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>') +
         '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
+        '<button class="xs ghost" data-a="refresh" data-u="' + esc(s.uid) + '" title="强制刷新登录 token（12153 / 401 掉线时先试这个）">刷新</button>' +
         (s.enterprise ? '' :
           '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
@@ -549,6 +550,9 @@ $('accBody').addEventListener('click', async ev => {
     } else if (a === 'balance') {
       const r = await api('accounts/' + encodeURIComponent(u) + '/balance', { method: 'POST' });
       toast('余额已更新：' + r.credits + (r.credits_total > 0 ? ' / ' + r.credits_total : ''), 'ok');
+    } else if (a === 'refresh') {
+      const r = await api('accounts/' + encodeURIComponent(u) + '/refresh', { method: 'POST' });
+      toast('token 已刷新' + (r.expires_at ? '，有效期至 ' + new Date(r.expires_at * 1000).toLocaleString() : ''), 'ok');
     } else if (a === 'unlock-model') {
       const r = await api('model_locks/unlock', { method: 'POST', body: JSON.stringify({ model: b.dataset.m, uid: u }) });
       toast(r.cleared ? '已解锁 ' + b.dataset.m : '该模型已不在冷却中', 'ok');

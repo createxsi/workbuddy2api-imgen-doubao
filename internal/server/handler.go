@@ -1578,6 +1578,9 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 账号临时出池（NoteFailures 达阈降权），单次/偶发不罚（不误伤）。ErrNone
 		// 到这里属防御路径（status>=400 但分类成功），语义不明不喂。
 		if kind == upstream.ErrClient {
+			if uerr != nil && upstream.IsGatewayUnauthorized(uerr.Status, body) && h.handleGatewayUnauthorized(uid) {
+				return
+			}
 			h.cfg.Pool.NoteFailures(uid)
 		}
 	}
@@ -1703,11 +1706,13 @@ const sessionDeadRefreshedCooldown = 30 * time.Second
 // 也会出现；一次即禁用会把还能续命的号打成「已禁用」，只能人工重登。这里先强制
 // 刷新一次（refresh 已按 RT 单飞，并发请求不会重复刷新）：
 //   - 刷新成功 → 清连续计数、落盘、短冷却后回池；
-//   - 无 refresh token 或刷新失败 → 禁用（refresh 也救不活，只能重登）。
+//   - 刷新被上游应用层明确拒绝，或无 refresh token → 禁用（只能重登）；
+//   - 刷新无判词（网络错 / 5xx / 429 / refresh 端点也被网关拦截）→ 只软冷却，不禁用。
 func (h *Handler) handleSessionDead(uid string) {
 	a := h.cfg.Pool.AuthByUID(uid)
 	if a != nil && a.RefreshTokenValue() != "" {
-		if err := h.cfg.Upstream.RefreshToken(a); err == nil {
+		err := h.cfg.Upstream.RefreshToken(a)
+		if err == nil {
 			if err := a.SaveAtomic(); err != nil {
 				log.Printf("ERR: [server] 12153 refresh acct=%s: save auth failed: %v", logfmt.Label(a.UID, a.Nickname), err)
 			}
@@ -1715,9 +1720,35 @@ func (h *Handler) handleSessionDead(uid string) {
 			h.cfg.Pool.Cooldown(uid, pool.CoolSoft, sessionDeadRefreshedCooldown, "12153 → token refreshed")
 			log.Printf("WARN: [server] acct=%s: 12153 session dead，强制刷新成功，短冷却后回池", logfmt.Label(a.UID, a.Nickname))
 			return
-		} else {
-			log.Printf("WARN: [server] acct=%s: 12153 session dead，强制刷新失败: %v", logfmt.Label(a.UID, a.Nickname), err)
 		}
+		if !upstream.RefreshRejected(err) {
+			h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "12153 (refresh inconclusive)")
+			log.Printf("WARN: [server] acct=%s: 12153 session dead，刷新无明确判词，软冷却不禁用: %v", logfmt.Label(a.UID, a.Nickname), err)
+			return
+		}
+		log.Printf("WARN: [server] acct=%s: 12153 session dead，刷新被上游拒绝: %v", logfmt.Label(a.UID, a.Nickname), err)
 	}
 	h.cfg.Pool.Disable(uid, "12153 session dead")
+}
+
+// handleGatewayUnauthorized 网关 401（无业务信封）先 refresh 求证：成功说明会话仍活、
+// 那次只是被拦截（或 access token 已过期），落盘新 token、清计数、软冷却后回池，
+// 不计连败。返回 false 表示未能证明会话存活，调用方按原有未知 4xx 语义处理。
+// 冷却用 CooldownSoftRate：防「chat 恒 401 但 refresh 恒成功」的号被高频轮换 RT。
+func (h *Handler) handleGatewayUnauthorized(uid string) bool {
+	a := h.cfg.Pool.AuthByUID(uid)
+	if a == nil || a.RefreshTokenValue() == "" || h.cfg.Upstream == nil {
+		return false
+	}
+	if err := h.cfg.Upstream.RefreshToken(a); err != nil {
+		log.Printf("WARN: [server] acct=%s: 网关 401，refresh 未证明会话存活: %v", logfmt.Label(a.UID, a.Nickname), err)
+		return false
+	}
+	if err := a.SaveAtomic(); err != nil {
+		log.Printf("ERR: [server] 网关 401 refresh acct=%s: save auth failed: %v", logfmt.Label(a.UID, a.Nickname), err)
+	}
+	h.cfg.Pool.ClearSessionDead(uid)
+	h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "gateway 401 (refresh ok)")
+	log.Printf("INFO: [server] acct=%s: 网关 401 但 refresh 成功 → 瞬时拦截，软冷却后回池", logfmt.Label(a.UID, a.Nickname))
+	return true
 }
