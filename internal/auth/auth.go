@@ -300,7 +300,22 @@ func Parse(raw []byte) (*Auth, error) {
 	if strings.TrimSpace(a.AccessToken) == "" {
 		return nil, fmt.Errorf("parse_error: missing accessToken")
 	}
+	a.ExpiresAt = normalizeExpiresAt(a.ExpiresAt)
 	return &a, nil
+}
+
+// expiresAtMillisThreshold 区分秒与毫秒时间戳的分界：1e11 秒已是公元 5138 年，
+// 1e11 毫秒是 1973 年，取在两者之间不会误判任一侧。
+const expiresAtMillisThreshold = 100_000_000_000
+
+// normalizeExpiresAt 把凭据的 expiresAt 归一到 Unix 秒。官方 CLI 凭据文件写的是
+// 毫秒，按秒解释会让到期时间落到遥远未来 → NeedsRefresh 恒假 → token 永不刷新，
+// 到期后账号静默全 401。
+func normalizeExpiresAt(v int64) int64 {
+	if v > expiresAtMillisThreshold {
+		return v / 1000
+	}
+	return v
 }
 
 // SaveAtomic 以嵌套形原子写回 FilePath（tmp + rename），保持嵌套形（插件可读）格式。
