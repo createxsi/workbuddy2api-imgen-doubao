@@ -45,6 +45,7 @@ const (
 	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
 	ErrClient                        // 其他 4xx / 业务错误
+	ErrUpstreamBusy                  // 6020 queue.waiting / 6021 queue.full 渠道级排队 → 上游容量信号：不罚号、不轮转，末端 503 透传原文
 )
 
 func (k ErrKind) String() string {
@@ -77,6 +78,8 @@ func (k ErrKind) String() string {
 		return "channel_refused"
 	case ErrClient:
 		return "client"
+	case ErrUpstreamBusy:
+		return "upstream_busy"
 	default:
 		return "none"
 	}
@@ -597,6 +600,13 @@ func Classify(status int, body string) ErrKind {
 	// 判定；无该 code 的 "credits exhausted" 文案仍保持普通 429 的软限流语义。
 	if status == http.StatusTooManyRequests && hasBusinessCode(body, "14018") {
 		return ErrHardCredit
+	}
+	// 6020「queue.waiting.title」/ 6021「queue.full.title」渠道级排队：上游容量信号，
+	// 不是账号限流。判在 429 兜底之前——按 ErrSoftRate 罚号会把几秒的排队放大成整号
+	// 冷却，且全冷却兜底再送上游又续订冷却。任意状态码都认；只认结构化 "code" 键，
+	// requestId 等字段恰好含这些数字不误伤。
+	if hasBusinessCode(body, "6020") || hasBusinessCode(body, "6021") {
+		return ErrUpstreamBusy
 	}
 	// status==429 先于 hardMarkers：限流响应 body 高频携带 "quota exceeded"/
 	// "额度不足" 等跨计费/限流两界的措辞，hardMarkers 先判会把限流误归

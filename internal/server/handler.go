@@ -994,6 +994,27 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
+			// 6020/6021 渠道级排队：不罚号不轮转，立即 503 透传上游原文。集群排队时
+			// 换任何账号都撞同一堵墙，轮转只会把无效请求放大。Retry-After 优先上游头，
+			// 缺失按 5s 提示。
+			if kind == upstream.ErrUpstreamBusy {
+				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+				fail(acct.UID)
+				msg := string(respBody)
+				if strings.TrimSpace(msg) == "" {
+					msg = "upstream queue is busy; retry after a short wait"
+				}
+				retryAfter := "5"
+				if uerr != nil && int64(uerr.RetryAfter.Seconds()) > 0 {
+					retryAfter = strconv.FormatInt(int64(uerr.RetryAfter.Seconds()), 10)
+				}
+				w.Header().Set("Retry-After", retryAfter)
+				writeOpenAIErrorHint(w, http.StatusServiceUnavailable, "upstream_busy", msg,
+					h.hintOf(upstream.ErrUpstreamBusy, string(respBody), bareModel, reqHasImage, uerr))
+				st.status = http.StatusServiceUnavailable
+				st.outcome = reqlog.OutcomeHTTPError
+				return
+			}
 			// 图片格式/数据无效：立即透传上游原文回客户端，不罚号不轮转。
 			// 同一 body 换账号仍是同样的解析结果，轮转只会放大无效请求。
 			if kind == upstream.ErrImageInvalid {
@@ -1561,6 +1582,9 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 	case upstream.ErrImageInvalid:
 		// 图片格式/数据无效：请求的问题不是账号的问题（同一 body 换任何号都会
 		// 得到相同解析错误）。零动作，chatCompletions 已 fail-fast 透传。
+	case upstream.ErrUpstreamBusy:
+		// 6020/6021 渠道级排队：账号健康，零动作（不冷却/不熔断/不喂连败）。
+		// chatCompletions 已 fail-fast 503 透传。
 	case upstream.ErrBadParams:
 		// 请求体解析失败（400 + Unmarshal chat params failed / 11101）：发给上游的 body
 		// 有问题（网关侧不再截断，均为客户端畸形 JSON）。换了账号照样 400，

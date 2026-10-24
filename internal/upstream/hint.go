@@ -58,6 +58,8 @@ func GatewayHint(kind ErrKind, msg string, ctx HintContext) string {
 	case ErrChannelRefused:
 		// 11128 通道校验失败：账号健康，问题在请求指纹/出口通道。给可操作的排查指向。
 		return "upstream rejected the request channel (it may not look like the official client); check user-agent/headers or an intercepting proxy, then retry"
+	case ErrUpstreamBusy:
+		return "upstream admission queue is busy (channel-level capacity, not an account problem); retry after a short wait"
 	case ErrSessionDead:
 		return "account session expired at upstream; the account is disabled until re-login"
 	case ErrHardCredit:

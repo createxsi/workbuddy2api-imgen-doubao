@@ -693,3 +693,21 @@ func TestFetchModelsOverlaysV3ConfigCapabilities(t *testing.T) {
 		t.Errorf("Efforts=%v want low,high,max", mi.Efforts)
 	}
 }
+
+// 6020/6021 渠道级排队：不按账号限流罚号；requestId 恰含数字不误伤。
+func TestClassifyUpstreamBusy(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		want   ErrKind
+	}{
+		{429, `{"code":6020,"msg":"queue.waiting.title"}`, ErrUpstreamBusy},
+		{429, `{"code":6021,"msg":"queue.full.title"}`, ErrUpstreamBusy},
+		{429, `{"code":1,"msg":"rate limit","requestId":"abc6020def"}`, ErrSoftRate},
+	}
+	for _, c := range cases {
+		if got := Classify(c.status, c.body); got != c.want {
+			t.Errorf("Classify(%d,%s)=%v want %v", c.status, c.body, got, c.want)
+		}
+	}
+}

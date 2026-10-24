@@ -90,3 +90,20 @@ func TestRefreshRejected(t *testing.T) {
 		}
 	}
 }
+
+// 6020 排队：503 + Retry-After，不罚号。
+func TestChatUpstreamBusyNoPenalty(t *testing.T) {
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		return 429, `{"code":6020,"msg":"queue.waiting.title"}`, false
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != 503 || rec.Header().Get("Retry-After") == "" {
+		t.Fatalf("code=%d retry-after=%q body=%s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	if st, _ := p.Status("u1"); st.Cooling || st.Disabled {
+		t.Fatalf("6020 must not penalize account: %+v", st)
+	}
+}
