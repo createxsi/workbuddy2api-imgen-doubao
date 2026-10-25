@@ -8,6 +8,7 @@ package panel
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,9 @@ const (
 
 // LogEntry 单条日志（时间戳取写入时刻；log 包行的行首日期时间已被剥离）。
 type LogEntry struct {
+	// Seq 入环序号（进程内单调递增，从 1 开始），供面板 ?since= 增量拉取做游标；
+	// 不用时间戳做游标是因为同一时钟刻度内可能写入多批，按时间过滤会漏行。
+	Seq  uint64    `json:"seq"`
 	TS   time.Time `json:"ts"`
 	Ch   string    `json:"ch"`
 	Text string    `json:"text"`
@@ -56,6 +60,7 @@ type Ring struct {
 	mu      sync.Mutex
 	entries []LogEntry
 	cap     int
+	seq     uint64
 }
 
 // NewRing 构建容量为 capacity 的日志环（非正值回退 500）。
@@ -76,7 +81,8 @@ func (r *Ring) Write(p []byte) (int, error) {
 			continue
 		}
 		text := tsPrefixRe.ReplaceAllString(line, "")
-		r.entries = append(r.entries, LogEntry{TS: now, Ch: classifyLine(text), Text: text})
+		r.seq++
+		r.entries = append(r.entries, LogEntry{Seq: r.seq, TS: now, Ch: classifyLine(text), Text: text})
 		if overflow := len(r.entries) - r.cap; overflow > 0 {
 			r.entries = r.entries[overflow:]
 		}
@@ -91,4 +97,16 @@ func (r *Ring) Snapshot() []LogEntry {
 	out := make([]LogEntry, len(r.entries))
 	copy(out, r.entries)
 	return out
+}
+
+// Since 返回序号大于 seq 的条目（写入顺序）与当前最新序号。seq=0 等价于全量。
+// 最新序号小于调用方游标说明进程已重启，调用方应改拉全量。
+func (r *Ring) Since(seq uint64) ([]LogEntry, uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// 条目按序号升序，二分找第一个大于 seq 的位置。
+	i := sort.Search(len(r.entries), func(i int) bool { return r.entries[i].Seq > seq })
+	out := make([]LogEntry, len(r.entries)-i)
+	copy(out, r.entries[i:])
+	return out, r.seq
 }

@@ -17,6 +17,16 @@ let reqRangeState = null; // 请求记录的时间范围（用量页的见 trang
 
 const $ = id => document.getElementById(id);
 
+/* setHTML 内容与上次写入相同时不碰 DOM：轮询每轮重建整表，数据没变时跳过解析、
+   重排与 GC，滚动位置与选中态也不会丢。只用于由本函数独占写入的容器。 */
+const lastHTML = new WeakMap();
+function setHTML(el, html) {
+  if (!el) return;
+  if (lastHTML.get(el) === html) return;
+  lastHTML.set(el, html);
+  el.innerHTML = html;
+}
+
 /* ── 主题 ─────────────────────────────────────────────────────────── */
 /* 两态翻转（浅/深），首次访问跟随系统偏好；点击总是切换可见外观，符合直觉。 */
 function effTheme() {
@@ -358,7 +368,7 @@ function go(v) {
   $('ttl').textContent = TITLES[v];
   if (v === 'models' && !$('mdBody').children.length) loadModels();
   if (v === 'config') loadConfig();
-  if (v === 'logs') loadLogs();
+  if (v === 'logs') loadLogs(); // 本地已有窗口时继续增量，不清游标
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
   // 到期提醒卡片：默认可见，进页面即用 overview 快照渲染（零上游请求，随首页统计
@@ -382,12 +392,12 @@ setTimeout(() => {
 function renderAccounts(list) {
   const tb = $('accBody');
   if (!list.length) {
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>';
+    setHTML(tb, '<tr><td colspan="9"><div class="empty"><div class="big">账号池是空的</div>点击右上角「添加账号」，用浏览器登录一个 WorkBuddy 账号</div></td></tr>');
     return;
   }
   // 有总额度（credits_total）→ 进度条按自身 剩余/总额 百分比；旧数据无总额 → 退回池内最高=100%
   const maxCred = Math.max(1, ...list.map(s => s.credits || 0));
-  tb.innerHTML = list.map(s => {
+  setHTML(tb, list.map(s => {
     const bl = (new Date(s.breaker_until || 0) - Date.now()) / 1000;
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
@@ -463,7 +473,7 @@ function renderAccounts(list) {
         (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
       '</td></tr>';
-  }).join('');
+  }).join(''));
 }
 
 // renderModelLocks 模型锁池：哪些模型不能用、锁了几个号、还要锁多久。
@@ -473,7 +483,7 @@ function renderModelLocks(rows) {
   if (!tb) return;
   const note = $('mlNote');
   if (!rows || !rows.length) {
-    tb.innerHTML = '<tr><td colspan="9"><div class="empty">当前没有模型级限流 —— 所有模型均可选</div></td></tr>';
+    setHTML(tb, '<tr><td colspan="9"><div class="empty">当前没有模型级限流 —— 所有模型均可选</div></td></tr>');
     if (note) note.textContent = '';
     if ($('btnUnlockAll')) $('btnUnlockAll').hidden = true;
     return;
@@ -483,7 +493,7 @@ function renderModelLocks(rows) {
     const ms = parseAPITime(iso);
     return ms ? dur(Math.max(0, Math.round((ms - Date.now()) / 1000))) : '—';
   };
-  tb.innerHTML = rows.map(r => {
+  setHTML(tb, rows.map(r => {
     const st = STATE[r.state] || ['mute', r.state || '—'];
     const realm = r.realm === 'global' ? '国际版' : '国内版';
     return '<tr>' +
@@ -498,7 +508,7 @@ function renderModelLocks(rows) {
       '<td class="acts"><button class="xs primary" data-a="unlock" data-m="' + esc(r.model) + '" data-r="' + esc(r.realm || '') +
         '" title="手动打开：清除该模型在本域所有账号上的模型级冷却，立刻重新参与选号">解锁</button></td>' +
       '</tr>';
-  }).join('');
+  }).join(''));
   if ($('btnUnlockAll')) $('btnUnlockAll').hidden = false;
   if (note) {
     const bad = rows.filter(r => r.state === 'locked' || r.state === 'starved').length;
@@ -595,7 +605,8 @@ if ($('mlBody')) $('mlBody').addEventListener('click', ev => {
   const b = ev.target.closest('button[data-a="unlock"]');
   if (!b) return;
   b.disabled = true;
-  unlockModels({ model: b.dataset.m, realm: b.dataset.r }, b.dataset.m);
+  // 解锁后行内容可能不变（setHTML 会跳过重绘），按钮需自行恢复。
+  unlockModels({ model: b.dataset.m, realm: b.dataset.r }, b.dataset.m).finally(() => { b.disabled = false; });
 });
 if ($('btnUnlockAll')) $('btnUnlockAll').onclick = () => {
   if (!confirm('清除全部模型级冷却（14003 繁忙 / 6004 限流 / 11102 不可用）？账号级冷却与熔断不受影响。')) return;
@@ -833,6 +844,27 @@ $('btnModels').onclick = loadModels;
 
 /* ── 日志（频道：全部/任务/对话/系统） ─────────────────────────────── */
 let logCh = 'all';
+/* 运行日志增量拉取：logState.rows 是本地窗口（上限与服务端环形缓冲同为 500），
+   cursor 是已见过的最大序号，下轮只请求 ?since=<cursor> 之后的新行。服务端进程
+   重启（boot 变化或 last_seq 小于游标）时自动退回全量。 */
+const LOG_ROWS_MAX = 500;
+let logState = { rows: [], cursor: 0, boot: '' };
+function resetLogWindow() { logState = { rows: [], cursor: 0, boot: '' }; }
+/* mergeLogRows 把 /logs 响应并入本地窗口（纯函数）：full=true 直接替换；增量只追加
+   seq 大于游标的行（并发两轮拉到同一批时不重复）；判定服务端已重启时返回 reset=true，
+   调用方改走全量。 */
+function mergeLogRows(st, resp, full) {
+  const incoming = (resp && resp.entries) || [];
+  const lastSeq = Number(resp && resp.last_seq) || 0;
+  const boot = String((resp && resp.boot) || '');
+  if (!full && (lastSeq < st.cursor || (st.boot && boot !== st.boot))) return { reset: true };
+  const fresh = full ? incoming : incoming.filter(e => (Number(e && e.seq) || 0) > st.cursor);
+  let rows = full ? fresh.slice() : st.rows.concat(fresh);
+  if (rows.length > LOG_ROWS_MAX) rows = rows.slice(-LOG_ROWS_MAX);
+  let cursor = full ? lastSeq : st.cursor;
+  for (const e of fresh) cursor = Math.max(cursor, Number(e && e.seq) || 0);
+  return { rows, cursor, boot, reset: false };
+}
 $('logChips').addEventListener('click', ev => {
   const b = ev.target.closest('button[data-ch]');
   if (!b) return;
@@ -849,8 +881,9 @@ async function loadLogs() {
   const rq = trangeQuery('reqRange', false);
   rq.set('limit', limit);
   try {
+    const full = logState.cursor <= 0;
     const [d, metrics, requestRows] = await Promise.all([
-      api('logs'),
+      api(full ? 'logs' : 'logs?since=' + logState.cursor),
       api('request_metrics').catch(() => ({})),
       api('request_logs?' + rq.toString()).catch(() => ({ entries: [] })),
     ]);
@@ -860,18 +893,21 @@ async function loadLogs() {
     const archiveOn = !!(metrics && metrics.archive && metrics.archive.enabled);
     const recent = archiveOn ? (requestRows.entries || []) : (metrics.recent || []);
     renderRequestMetrics(metrics, recent);
-    const entries = (d.entries || []).filter(e => logCh === 'all' || e.ch === logCh);
-    box.innerHTML = entries.length
+    let m = mergeLogRows(logState, d, full);
+    if (m.reset) m = mergeLogRows(logState, await api('logs'), true);
+    logState = m;
+    const entries = logState.rows.filter(e => logCh === 'all' || e.ch === logCh);
+    setHTML(box, entries.length
       ? entries.map(e => {
         const lvl = /error|失败|错误/.test(e.text) ? ' e' : /warn|冷却|熔断/.test(e.text) ? ' w' : '';
         const t = e.ts ? new Date(e.ts).toLocaleTimeString('zh-CN', { hour12: false }) : '';
         const ch = logCh === 'all' ? '<i class="lch c-' + esc(e.ch) + '">' + ({ task: '任务', chat: '对话', sys: '系统' }[e.ch] || e.ch) + '</i>' : '';
         return '<span class="ln' + lvl + '">' + ch + esc(t + ' ' + e.text) + '</span>';
       }).join('')
-      : '<span style="color:var(--ink-3)">暂无日志</span>';
+      : '<span style="color:var(--ink-3)">暂无日志</span>');
     if (logPin && atEnd) box.scrollTop = box.scrollHeight;
     const counts = {};
-    for (const e of (d.entries || [])) counts[e.ch] = (counts[e.ch] || 0) + 1;
+    for (const e of logState.rows) counts[e.ch] = (counts[e.ch] || 0) + 1;
     $('logNote').textContent = logCh === 'all'
       ? '任务 ' + (counts.task || 0) + ' · 对话 ' + (counts.chat || 0) + ' · 系统 ' + (counts.sys || 0)
       : (logCh === 'task' ? '任务' : logCh === 'chat' ? '对话' : '系统') + ' ' + entries.length + ' 行';
@@ -938,7 +974,7 @@ function renderRequestTable() {
   const list = reqEntries.filter(e => reqMatch(e));
   const tb = $('reqBody');
   if (!tb) return;
-  tb.innerHTML = list.map(e => {
+  setHTML(tb, list.map(e => {
     const when = e && e.time ? new Date(e.time).toLocaleTimeString('zh-CN', { hour12: false }) : '—';
     const ip = e && e.client_ip ? e.client_ip : '';
     const ua = e && e.user_agent ? e.user_agent : '';
@@ -956,7 +992,7 @@ function renderRequestTable() {
       '<td>' + (rid ? '<span class="clip rid" title="' + esc(rid) + '">' + esc(rid) + '</span>' : '<span class="muted">—</span>') + '</td>' +
       '</tr>';
   }).join('') || '<tr><td colspan="10" class="empty">' +
-      (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>';
+      (reqEntries.length ? '没有符合当前筛选条件的请求记录' : '暂无请求记录') + '</td></tr>');
 
   const filtered = list.length !== reqEntries.length;
   // 归档里的旧条目没有来源字段（该功能上线前写入）：这时提示开关/历史原因，
@@ -981,7 +1017,7 @@ if ($('reqOutcome')) $('reqOutcome').onchange = () => {
   renderRequestTable();
 };
 if ($('reqLimit')) $('reqLimit').onchange = loadLogs;
-if ($('btnReqReload')) $('btnReqReload').onclick = loadLogs;
+if ($('btnReqReload')) $('btnReqReload').onclick = () => { resetLogWindow(); loadLogs(); };
 // 时间范围：默认「全部历史」——请求记录页的历史行为就是"取最近 N 条"，
 // 加一个默认收窄的区间会让打开页面时看到的条数凭空变少。
 if ($('reqRange')) trangeBind('reqRange', loadLogs, '0');
@@ -1282,15 +1318,35 @@ $('btnRefresh').onclick = async () => {
 };
 
 /* ── 轮询 ─────────────────────────────────────────────────────────── */
+/* 标签页切到后台时暂停轮询（看不见的刷新只消耗网络与 CPU）；回到前台立即补拉一次
+   再恢复定时器。 */
+const POLL_MS = 5000;
+let pageHidden = document.visibilityState === 'hidden';
+function startPolling() {
+  if (refTimer) { clearInterval(refTimer); refTimer = null; }
+  if (pageHidden) return;
+  refTimer = setInterval(refreshVisible, POLL_MS);
+}
+document.addEventListener('visibilitychange', () => {
+  const hidden = document.visibilityState === 'hidden';
+  if (hidden === pageHidden) return;
+  pageHidden = hidden;
+  if (hidden) {
+    if (refTimer) { clearInterval(refTimer); refTimer = null; }
+    return;
+  }
+  refreshVisible();
+  startPolling();
+});
 function refreshVisible() {
+  if (pageHidden) return;
   if (view === 'accounts') loadOverview(true);
   else if (view === 'logs') loadLogs();
   else if (view === 'taskscenter') reattachQueueView();
 }
 function start() {
   loadOverview(true);
-  if (refTimer) clearInterval(refTimer);
-  refTimer = setInterval(refreshVisible, 5000);
+  startPolling();
   checkAuthGate();
 }
 async function checkAuthGate() {

@@ -262,8 +262,22 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 }
 
 // logsHandler 返回日志环形缓冲快照（时间升序，含频道标记 chat/task/sys）。
+//
+// ?since=<seq> 只返回序号大于 seq 的新行（增量拉取）；缺省或非法值返回全量。
+// last_seq 为当前最新序号、boot 为本进程启动标识，前端据此发现进程重启并退回全量。
 func (p *Panel) logsHandler(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"entries": p.logs.Snapshot()})
+	var since uint64
+	if raw := r.URL.Query().Get("since"); raw != "" {
+		if n, err := strconv.ParseUint(raw, 10, 64); err == nil {
+			since = n
+		}
+	}
+	entries, last := p.logs.Since(since)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries":  entries,
+		"last_seq": last,
+		"boot":     strconv.FormatInt(p.started.UnixNano(), 10),
+	})
 }
 
 // requestMetrics 返回进程内请求指标、最近 100 条与归档状态。
