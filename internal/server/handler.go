@@ -152,6 +152,7 @@ func NewHandler(cfg Config) *Handler {
 	// 官方联网检索透传（search.go）。
 	h.mux.HandleFunc("POST /v1/search", h.withAuth(h.webSearch))
 	h.mux.HandleFunc("POST /v1/webfetch", h.withAuth(h.webFetch))
+	h.mux.HandleFunc("POST /v1/fetch", h.withAuth(h.deepSeekFetch))
 	// 生图（OpenAI Images API 兼容）：转发到账号 realm 对应的上游
 	// /v2/images/generations（global = www.workbuddy.ai，即桌面版 WorkBuddyAI
 	// ImageGen 的同域端点）。选号/轮转/错误处置与 chat 同链路。

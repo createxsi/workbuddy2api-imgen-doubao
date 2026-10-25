@@ -1,5 +1,6 @@
 // search.go 官方 agenttool 联网能力的出口：
 //   - POST /v1/search：检索原文透传（deep=true 走综述式检索）；POST /v1/webfetch：网页正文；
+//   - POST /v1/fetch：DeepSeek Fetch API 形状（{url} → {content,url,title}），与 /v1/webfetch 同一上游与取号；
 //   - /v1/messages 的 web_search 服务端工具、/v1/responses 的托管 web_search 工具：
 //     由网关执行检索，模型只负责写检索词与据结果作答。
 package server
@@ -12,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -106,6 +108,8 @@ const agenticSearchTimeout = 3 * time.Minute
 
 // webSearch POST /v1/search  {"query":"...","max_results":5,"realm":"cn|global","deep":false}
 // deep=true 走综述式检索（耗时数十秒、消耗较大），返回 done 帧原文。
+// DeepSeek Search API 兼容：max_results 缺省时回落 count；来自 DSH（UA 含
+// deepseek-harness）的请求在结果里补 date:null 与 title/snippet 字符串，其余客户端原文透传。
 func (h *Handler) webSearch(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -115,12 +119,16 @@ func (h *Handler) webSearch(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Query      string `json:"query"`
 		MaxResults int    `json:"max_results"`
+		Count      int    `json:"count"`
 		Realm      string `json:"realm"`
 		Deep       bool   `json:"deep"`
 	}
 	if json.Unmarshal(body, &in) != nil || strings.TrimSpace(in.Query) == "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "query is required")
 		return
+	}
+	if in.MaxResults <= 0 {
+		in.MaxResults = in.Count
 	}
 	var raw json.RawMessage
 	var status int
@@ -133,11 +141,61 @@ func (h *Handler) webSearch(w http.ResponseWriter, r *http.Request) {
 	} else {
 		raw, status, err = h.searchOnce(r.Context(), h.searchRealm(in.Realm), in.Query, in.MaxResults)
 	}
+	if err == nil && deepSeekSearchClient(r.UserAgent()) {
+		raw = compatDeepSeekSearch(raw)
+	}
 	writeAgentToolResult(w, raw, status, err)
 }
 
-// webFetch POST /v1/webfetch  {"url":"https://...","realm":"cn|global"}：网页正文（markdown）。
-func (h *Handler) webFetch(w http.ResponseWriter, r *http.Request) {
+// deepSeekSearchClient 请求是否来自 DSH（DeepSeek Harness）：只对它补字段，不猜其它客户端。
+func deepSeekSearchClient(ua string) bool {
+	return strings.Contains(strings.ToLower(ua), "deepseek-harness")
+}
+
+// compatDeepSeekSearch 把结果补成 DeepSeek Search API 校验要求的形状：results[].date
+// 缺失补 null（上游不给发布日期，DSH 对缺失字段直接判 invalid response），title/snippet
+// 缺失或 null 补空串。解析失败原样返回。
+func compatDeepSeekSearch(raw []byte) []byte {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return raw
+	}
+	var items []map[string]json.RawMessage
+	if rs, ok := obj["results"]; !ok || json.Unmarshal(rs, &items) != nil || len(items) == 0 {
+		return raw
+	}
+	for _, it := range items {
+		if _, has := it["date"]; !has {
+			it["date"] = json.RawMessage("null")
+		}
+		for _, k := range []string{"title", "snippet"} {
+			if v, has := it[k]; !has || string(v) == "null" {
+				it[k] = json.RawMessage(`""`)
+			}
+		}
+	}
+	rs, err := json.Marshal(items)
+	if err != nil {
+		return raw
+	}
+	obj["results"] = rs
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+// webFetch POST /v1/webfetch  {"url":"https://...","realm":"cn|global"}：网页正文（上游原文透传）。
+func (h *Handler) webFetch(w http.ResponseWriter, r *http.Request) { h.fetchPage(w, r, false) }
+
+// deepSeekFetch POST /v1/fetch：DeepSeek Fetch API 形状（DSH 的 web 工具把 /search 与
+// /fetch 指向同一 base）。与 /v1/webfetch 共用上游与取号，只多一步响应校验。
+func (h *Handler) deepSeekFetch(w http.ResponseWriter, r *http.Request) { h.fetchPage(w, r, true) }
+
+// fetchPage 两个抓页入口的共用实现。realm：显式 realm 优先，其次 model 前缀（cn:/global:）。
+// dsShape=true 时要求上游 content 为字符串（缺失则 502，不伪造空正文），并补回 url。
+func (h *Handler) fetchPage(w http.ResponseWriter, r *http.Request, dsShape bool) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "read body: "+err.Error())
@@ -146,15 +204,54 @@ func (h *Handler) webFetch(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		URL   string `json:"url"`
 		Realm string `json:"realm"`
+		Model string `json:"model"`
 	}
-	if json.Unmarshal(body, &in) != nil || !(strings.HasPrefix(in.URL, "http://") || strings.HasPrefix(in.URL, "https://")) {
+	if json.Unmarshal(body, &in) != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "url (http/https) is required")
 		return
 	}
-	raw, status, err := h.agentToolOnce(r.Context(), h.searchRealm(in.Realm), func(ctx context.Context, a *auth.Auth) (json.RawMessage, error) {
+	in.URL = strings.TrimSpace(in.URL)
+	if !(strings.HasPrefix(in.URL, "http://") || strings.HasPrefix(in.URL, "https://")) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", "url (http/https) is required")
+		return
+	}
+	realm := in.Realm
+	if realm == "" && strings.Contains(in.Model, ":") {
+		realm, _ = resolveModel(in.Model)
+	}
+	raw, status, err := h.agentToolOnce(r.Context(), h.searchRealm(realm), func(ctx context.Context, a *auth.Auth) (json.RawMessage, error) {
 		return h.cfg.Upstream.WebFetch(ctx, a, in.URL)
 	})
+	if err == nil && dsShape {
+		out, nerr := normalizeFetchResponse(raw, in.URL)
+		if nerr != nil {
+			log.Printf("WARN: [search] fetch: 上游响应不可用: %v", nerr)
+			writeOpenAIError(w, http.StatusBadGateway, "upstream_error", nerr.Error())
+			return
+		}
+		raw = out
+	}
 	writeAgentToolResult(w, raw, status, err)
+}
+
+// normalizeFetchResponse 校验上游 webfetch 响应为 {content:string,...}；url 缺失时补请求 URL。
+func normalizeFetchResponse(raw []byte, reqURL string) ([]byte, error) {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return nil, fmt.Errorf("upstream fetch response is not a JSON object")
+	}
+	c, ok := obj["content"]
+	if !ok || string(c) == "null" {
+		return nil, fmt.Errorf("upstream fetch response has no content field")
+	}
+	var s string
+	if json.Unmarshal(c, &s) != nil {
+		return nil, fmt.Errorf("upstream fetch content is not a string")
+	}
+	if _, ok := obj["url"]; !ok {
+		obj["url"] = json.RawMessage(strconv.Quote(reqURL))
+	}
+	return json.Marshal(obj)
 }
 
 func writeAgentToolResult(w http.ResponseWriter, raw json.RawMessage, status int, err error) {
