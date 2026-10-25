@@ -364,6 +364,9 @@ func IsModelBlocked(status int, body string) bool {
 // hasBusinessCode reports whether a JSON error envelope contains an exact
 // business code in a field named "code". Upstream envelopes vary between
 // top-level and nested error/data objects, so walk the decoded structure.
+// HasBusinessCode 报告 body 的结构化 "code" 键是否为 want（导出供 server 判锁因）。
+func HasBusinessCode(body, want string) bool { return hasBusinessCode(body, want) }
+
 func hasBusinessCode(body, want string) bool {
 	var root any
 	if err := json.Unmarshal([]byte(body), &root); err != nil {

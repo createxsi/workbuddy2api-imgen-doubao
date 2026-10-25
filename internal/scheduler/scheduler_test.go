@@ -365,6 +365,10 @@ func TestRunKeepaliveSessionDeadResetBySuccess(t *testing.T) {
 		t.Fatalf("precondition: 前 2 次不应禁用: %+v", st)
 	}
 	s.RunKeepaliveNow() // 刷新成功 → 清计数
+	// 新 AT 有效期内 12153 不计死（见下一个用例）；这里模拟 AT 已过期再计数。
+	a.Lock()
+	a.ExpiresAt = 1
+	a.Unlock()
 	// 接下来连续 2 次 12153：从新计数重新算，仍不应禁用（历史计数已清）。
 	s.RunKeepaliveNow() // 12153 #1（新计数）
 	s.RunKeepaliveNow() // 12153 #2（新计数）
@@ -374,6 +378,24 @@ func TestRunKeepaliveSessionDeadResetBySuccess(t *testing.T) {
 	s.RunKeepaliveNow() // 12153 #3（新计数）→ 禁用
 	if st, _ := p.Status("u1"); !st.Disabled {
 		t.Fatalf("新计数第 3 次 12153 应禁用: %+v", st)
+	}
+}
+
+// refresh 恒回 12153 但 AT 仍有效：账号对话照常，保活不计 session dead、不禁用。
+func TestRunKeepaliveSessionDeadButATValidNotDisabled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(401)
+		w.Write([]byte(`{"code":12153,"msg":"Offline user session not found"}`))
+	}))
+	defer srv.Close()
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	s := New(Config{Pool: p, Upstream: &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL}})
+	for i := 0; i < 4; i++ {
+		s.RunKeepaliveNow()
+	}
+	if st, _ := p.Status("u1"); st.Disabled {
+		t.Fatalf("AT 仍有效不应禁用: %+v", st)
 	}
 }
 

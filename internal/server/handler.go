@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"sync"
 	"time"
@@ -874,20 +875,26 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		// token 临近过期 → 先 refresh（失败冷却换号）
 		if acct.NeedsRefresh(h.cfg.RefreshSkew) {
 			if err := h.cfg.Upstream.RefreshToken(acct); err != nil {
-				lastErr = err
 				var ue *upstream.Error
-				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
-					h.cfg.Pool.Disable(acct.UID, "refresh session dead")
+				if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead && upstream.SessionDeadButUsable(acct) {
+					// refresh token 失效 ≠ 账号不可用：AT 尚未过期时本请求仍会成功。
+					// 不罚也不换号，直接拿现有 AT 发这一次。
+					log.Printf("INFO: [server] acct=%s: refresh token 已失效但 access token 仍有效，用现有 token 继续",
+						logfmt.Label(acct.UID, acct.Nickname))
 				} else {
-					h.cfg.Pool.NoteError(acct.UID)
+					lastErr = err
+					if errors.As(err, &ue) && ue.Kind == upstream.ErrSessionDead {
+						h.cfg.Pool.Disable(acct.UID, "refresh session dead")
+					} else {
+						h.cfg.Pool.NoteError(acct.UID)
+					}
+					fail(acct.UID)
+					if !rotateBackoff(i, r.Context()) {
+						break // ctx 取消：终止轮转（refresh 失败换号退避）
+					}
+					continue
 				}
-				fail(acct.UID)
-				if !rotateBackoff(i, r.Context()) {
-					break // ctx 取消：终止轮转（refresh 失败换号退避）
-				}
-				continue
-			}
-			if err := acct.SaveAtomic(); err != nil {
+			} else if err := acct.SaveAtomic(); err != nil {
 				// 刷新成功但落盘失败：下次启动会用旧 token，必须暴露
 				log.Printf("ERR: [server] chat refresh acct=%s: save auth failed: %v", logfmt.Label(acct.UID, acct.Nickname), err)
 			}
@@ -1243,6 +1250,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// retryAfterSec 非 0 时写 Retry-After 头：只有「全池该模型只是忙/被限流」
 	// 这种可重试形态才有意义（见下方 modelBlock 分支）。
 	retryAfterSec := 0
+	// quotaCode 非 0：全池该模型清一色是用量配额锁（6004/6000），按上游业务码回 429。
+	quotaCode := 0
 	var ue *upstream.Error
 	if errors.As(lastErr, &ue) {
 		hint = h.hintOf(ue.Kind, ue.Msg, bareModel, reqHasImage, ue)
@@ -1285,7 +1294,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 快照（仅瞬时忙/限流形态），让「全池该模型只是忙」统一成 503 model_busy + Retry-After，
 	// 而不是 429 且无 Retry-After（MaxRotate=1 时必现）。
 	if !modelBlock.Blocked {
-		if snap := h.cfg.Pool.ModelBlocked(bareModel); snap.Blocked && modelBlockIsTransient(snap.Reason) {
+		if snap := h.cfg.Pool.ModelBlocked(bareModel); snap.Blocked && (modelBlockIsTransient(snap.Reason) || modelBlockAllQuota(snap)) {
 			modelBlock = snap
 		}
 	}
@@ -1293,7 +1302,20 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 例外：冷却原因是瞬时的「忙 / 被限流」（14003 模型繁忙、6004 模型限流）时，
 	// 号本身活着、等一下就能用，回 400 会被客户端读成「模型不可用、重试无意义」。
 	// 这种形态改回可重试语义：503 + Retry-After（最早解封时刻）+ code=model_busy。
-	if modelBlock.Blocked && modelBlockIsTransient(modelBlock.Reason) {
+	if modelBlockAllQuota(modelBlock) {
+		// 全池该模型的锁都是用量配额（6004/6000，上游明说将在某时刻重置）：重置前
+		// 重试必然同样失败。回 429 + 上游业务码 + 原文，且不发 Retry-After——客户端
+		// 普遍把它当「睡多久」，几十分钟的冷却会变成几十分钟静默挂起。
+		status, quotaCode = http.StatusTooManyRequests, modelQuotaCode(modelBlock.Reason)
+		msg = "model usage limit reached on every account; retry after the quota window resets"
+		if s := strings.TrimSpace(modelBlock.Reason); s != "" {
+			msg = s
+		}
+		hint = fmt.Sprintf("model_quota: %d account(s) hit this model's usage limit", modelBlock.Count)
+		if !modelBlock.Until.IsZero() {
+			hint += "; resets at " + modelBlock.Until.Format(time.RFC3339)
+		}
+	} else if modelBlock.Blocked && modelBlockIsTransient(modelBlock.Reason) {
 		code = "model_busy"
 		status = http.StatusServiceUnavailable
 		if !upstreamMsgPassed {
@@ -1303,7 +1325,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if !modelBlock.Until.IsZero() {
 			if d := time.Until(modelBlock.Until); d > 0 {
 				secs := int(math.Ceil(d.Seconds()))
-				retryAfterSec = secs
+				retryAfterSec = min(secs, maxRetryAfterSec)
 				hint += fmt.Sprintf("; earliest unblock in %ds", secs)
 			}
 		}
@@ -1329,9 +1351,49 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if retryAfterSec > 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(retryAfterSec))
 	}
-	writeOpenAIErrorHint(w, status, code, msg, hint)
+	if quotaCode != 0 {
+		writeModelQuotaError(w, quotaCode, msg, hint)
+	} else {
+		writeOpenAIErrorHint(w, status, code, msg, hint)
+	}
 	st.status = status
 	st.outcome = reqlog.OutcomeHTTPError
+}
+
+// maxRetryAfterSec Retry-After 上报上限（10 分钟）：客户端普遍按该头直接睡眠且不设
+// 上限，超长冷却按上限报，到点重试再拿一次本地 503 即可（不打上游）。
+const maxRetryAfterSec = 600
+
+// modelBlockAllQuota 全池该模型被挡是否清一色是用量配额型（6004/6000：是模型级限流、
+// 但不是 14003 瞬时繁忙）。锁因不是上游原文时不认，保持旧行为。
+func modelBlockAllQuota(blk pool.ModelBlockStatus) bool {
+	if !blk.Blocked || len(blk.Reasons) == 0 {
+		return false
+	}
+	for _, r := range blk.Reasons {
+		if !upstream.IsModelRateLimit(r) || upstream.IsModelBusy(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// modelQuotaCode 锁因里的用量配额业务码，识别不到 6000 时按 6004。
+func modelQuotaCode(reason string) int {
+	if upstream.HasBusinessCode(reason, "6000") {
+		return 6000
+	}
+	return 6004
+}
+
+// writeModelQuotaError 全池模型用量配额耗尽专用响应：429 + 数字业务码（客户端按
+// 数字业务码判能否重试）+ type insufficient_quota。
+func writeModelQuotaError(w http.ResponseWriter, code int, msg, hint string) {
+	e := map[string]any{"message": msg, "type": "insufficient_quota", "code": code}
+	if hint != "" {
+		e["gateway_hint"] = hint
+	}
+	writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": e})
 }
 
 // modelBlockIsTransient 判断模型级冷却的原因是「暂时忙/被限流」还是「确定性拒绝」。
@@ -1345,12 +1407,25 @@ func modelBlockIsTransient(reason string) bool {
 	if s == "" {
 		return false
 	}
-	for _, marker := range []string{"14003", "6004", "model busy", "model rate limit", "rate limit"} {
+	for _, marker := range []string{"14003", "6004", "6000", "model busy", "model rate limit", "rate limit"} {
 		if strings.Contains(s, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+// truncateReason 冷却原因上限 400 字节（按 rune 边界截断），防异常长 body 落进池状态。
+func truncateReason(s string) string {
+	const max = 400
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // tokensPerSecond 计算吐字速率（token/s），返回 (速率, 是否有意义)。
@@ -1506,6 +1581,12 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 模型级必须**先判**：此前只有 6004 算模型级，14003「模型繁忙」掉进账号级
 		// 分支，一个瞬时抖动就把整个号罚 600s（线上国际版就是这样整池冷 10 分钟）。
 		modelRateLimited := upstream.IsModelRateLimit(body)
+		// 模型级冷却的 reason 存上游原文：面板能看出锁因，全池锁时也能透传上游话术
+		// 并据此判断是否为用量配额。
+		modelReason := "model rate limit"
+		if s := strings.TrimSpace(body); s != "" {
+			modelReason = truncateReason(s)
+		}
 		resetAt, hasReset := upstream.ParseRateReset(body)
 		if !hasReset && uerr != nil && uerr.RetryAfter > 0 {
 			// body 无重置文案但带 Retry-After 头 → 冷却到该时刻（不做指数堆加）。
@@ -1514,7 +1595,7 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		}
 		if modelRateLimited {
 			if hasReset {
-				h.cfg.Pool.CooldownSoftForModel(uid, h.softCooldown(), resetAt, model, "model rate limit")
+				h.cfg.Pool.CooldownSoftForModel(uid, h.softCooldown(), resetAt, model, modelReason)
 				return
 			}
 			// 14003 没有恢复时刻，上游文案就是让客户端换模型/稍后重试：
@@ -1523,7 +1604,7 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 				h.cfg.Pool.CooldownModelBusy(uid, model, "14003 model busy")
 				return
 			}
-			h.cfg.Pool.CooldownSoftForModel(uid, h.softCooldown(), time.Time{}, model, "model rate limit")
+			h.cfg.Pool.CooldownSoftForModel(uid, h.softCooldown(), time.Time{}, model, modelReason)
 			return
 		}
 		if hasReset {
