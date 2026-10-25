@@ -97,7 +97,7 @@ const sandbox = new Proxy({
 sandbox.window = sandbox; sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 try {
-  vm.runInContext(src, sandbox, { filename: 'app.js' });
+  vm.runInContext("'use strict';\n" + src, sandbox, { filename: 'app.js' });
   console.log('SMOKE OK');
   process.exit(0);
 } catch (e) {
@@ -141,7 +141,7 @@ const end = src.indexOf('function usStat');
 if (start < 0 || end < 0) throw new Error('credit helpers not found');
 const ctx = { Number, String, RegExp };
 vm.createContext(ctx);
-vm.runInContext(
+vm.runInContext("'use strict';\n" +
   src.slice(start, end) +
   '\nthis.fmtCredit=fmtCredit; this.fmtCreditRatio=fmtCreditRatio; this.fmtModelRate=fmtModelRate;',
   ctx
@@ -238,7 +238,7 @@ const reqEnd = src.indexOf('function fmtBytes');
 if ([escStart, escEnd, fmtStart, fmtEnd, reqStart, reqEnd].some(v => v < 0)) throw new Error('request log helpers not found');
 const ctx = { Date, Number, String, Math, RegExp, isNaN };
 vm.createContext(ctx);
-vm.runInContext(
+vm.runInContext("'use strict';\n" +
   src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(reqStart, reqEnd) +
   '\nthis.requestLogText=requestLogText;',
   ctx
@@ -287,7 +287,7 @@ const end = src.indexOf('function reqOutcomeTag');
 if (start < 0 || end < 0) throw new Error('reqMatch not found');
 const ctx = {};
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.reqMatch=reqMatch;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.reqMatch=reqMatch;', ctx);
 const base = { outcome: 'success', client_ip: '203.0.113.7', user_agent: 'python-requests/2.31.0', model: 'cn:glm-5.3', account: '示例(uid8)', request_id: 'req-1' };
 const other = { outcome: 'http_error', client_ip: '198.51.100.4', user_agent: 'Mozilla/5.0 Chrome/120', model: 'global:hy3', account: '甲(uid9)', request_id: 'req-2' };
 const rows = [base, other];
@@ -335,7 +335,7 @@ const end = src.indexOf('function mdRowHtml');
 if (start < 0 || end < 0) throw new Error('model filter helpers not found');
 const ctx = { Number, String, Array, Object, isFinite, parseFloat };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.mdMatch=mdMatch; this.mdSortList=mdSortList; this.mdRateValue=mdRateValue;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.mdMatch=mdMatch; this.mdSortList=mdSortList; this.mdRateValue=mdRateValue;', ctx);
 const models = [
   { id: 'cn:glm-5.2', name: 'GLM-5.2', vendor: 'Zhipu', tags: ['视觉'], supports_tool_call: true, supports_images: true, supports_reasoning: true, can_disable_thinking: true, supported_efforts: ['high', 'xhigh'], default_effort: 'high', is_default: false, credits: '0.79', promo_factor: 0.5, promo_credits: '0.40', promo_label: '夜间折扣', context_length: 1000000, max_output_tokens: 131000 },
   { id: 'cn:hy3', name: 'Hy3', supports_tool_call: true, supports_images: true, supports_reasoning: true, can_disable_thinking: false, supported_efforts: ['low', 'high'], default_effort: 'high', is_default: false, credits: '0', promo_factor: 0, promo_credits: '0', promo_label: '限时免费', context_length: 192000, max_output_tokens: 64000 },
@@ -425,7 +425,7 @@ const ctx = {
   $: () => host,
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(start, end) +
+vm.runInContext("'use strict';\n" + src.slice(escStart, escEnd) + src.slice(fmtStart, fmtEnd) + src.slice(start, end) +
   '\nthis.renderUsageChart=renderUsageChart;', ctx);
 const series = [
   { t: '2026-09-30T09', scope: 'hour', prompt_tokens: 35, completion_tokens: 16, total_tokens: 51, requests: 1 },
@@ -484,7 +484,7 @@ const ctx = {
   esc: s => String(s == null ? '' : s),
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) +
+vm.runInContext("'use strict';\n" + src.slice(start, end) +
   '\nthis.trangeState=trangeState; this.trangeQuery=trangeQuery; this.trangeLabel=trangeLabel; this.trangeMidnight=trangeMidnight;', ctx);
 const q = (preset, rolling) => {
   ctx.trangeState('t').preset = preset;
@@ -620,7 +620,7 @@ const end = src.indexOf('function renderPackages');
 if (start < 0 || end < 0) throw new Error('detail group functions not found');
 const ctx = { Date, Math, Number, String, Map, Array, Object, isFinite };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.pkDetailGroups = pkDetailGroups; this.pkDetailLimit = pkDetailLimit;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.pkDetailGroups = pkDetailGroups; this.pkDetailLimit = pkDetailLimit;', ctx);
 const input = [
   { id: 'small-late', size: 100, remain: 1, expires_at: 400 },
   { id: 'zero-early-b', size: 200, remain: 0, expires_at: 200 },
@@ -676,7 +676,7 @@ const end = src.indexOf('function renderExpiryDistribution');
 if (start < 0 || end < 0) throw new Error('expiry summary functions not found');
 const ctx = { Date, Math, Number, String, Map, Array, Object, isFinite };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.summarizeCreditDays = summarizeCreditDays; this.pkAccountColorMap = pkAccountColorMap;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.summarizeCreditDays = summarizeCreditDays; this.pkAccountColorMap = pkAccountColorMap;', ctx);
 const day = 86400000, now = 100000;
 const out = ctx.summarizeCreditDays([
   { uid: 'a', remain: 100, packages: [
@@ -746,7 +746,7 @@ const ctx = {
   $: id => (id === 'cfgForm' ? cfgForm : null),
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.collectConfig = collectConfig;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.collectConfig = collectConfig;', ctx);
 const out = ctx.collectConfig();
 const has = (o, k) => Object.prototype.hasOwnProperty.call(o || {}, k);
 process.stdout.write(JSON.stringify([
@@ -802,7 +802,7 @@ const ctx = {
   lastPackages: null, lastPackagesAt: 0,
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.renderExpiry = renderExpiry;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.renderExpiry = renderExpiry;', ctx);
 const iso = n => {
   const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + n);
   const p = x => String(x).padStart(2, '0');
@@ -870,7 +870,7 @@ const ctx = {
   Date, Math, Number, String, Map, Array, Object, isNaN,
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.renderExpirySnapshot = renderExpirySnapshot;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.renderExpirySnapshot = renderExpirySnapshot;', ctx);
 const day = n => {
   const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() + n);
   return d.toISOString();
@@ -972,7 +972,7 @@ const ctx = {
   Date, Math, Number, String, Map, Array, Object, isNaN, Infinity, isFinite, Set,
 };
 vm.createContext(ctx);
-vm.runInContext(src.slice(start, end) + '\nthis.renderUsageChart = renderUsageChart;', ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.renderUsageChart = renderUsageChart;', ctx);
 const series = [];
 for (let h = 0; h < 5; h++) {
   const d = new Date(); d.setHours(d.getHours() - (4 - h), 0, 0, 0);
