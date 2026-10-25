@@ -92,6 +92,16 @@ const noHealthyHint = "no healthy account available in pool; check /status or re
 // NoHealthyAccountHint 本地调度错误的 gateway_hint（与 no_healthy_account code 配套）。
 func NoHealthyAccountHint() string { return noHealthyHint }
 
+// NoHealthyAccountHintForModel 带 realm 感知的选号失败 hint：裸名落错域时告诉客户端
+// 改用 "<otherRealm>:<model>"。任一参数为空时退回固定文案，不对模型能力做断言。
+func NoHealthyAccountHintForModel(bareModel, otherRealm string) string {
+	if bareModel == "" || otherRealm == "" {
+		return noHealthyHint
+	}
+	return `model "` + bareModel + `" is only available in the ` + otherRealm +
+		` realm; retry with "` + otherRealm + `:` + bareModel + `"`
+}
+
 // FrameHintFunc 返回 SSE error 帧的 gateway_hint 判定函数（Stream 的可选参数）。
 // ctxFn 惰性求值：仅在实际撞到 error 帧才调用（正常流零开销，模型目录查询
 // 不会为每个成功请求触发）。

@@ -1242,8 +1242,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		msg = "upstream timed out: rotation stopped (another account would hit the same slow upstream), please retry later"
 	}
 	// gateway_hint（末端透传）：上游错误按 Kind + 原文 + 请求形态判定；本地调度类
-	// 错误（无上游原文）固定 no_healthy_account hint。
-	hint := upstream.NoHealthyAccountHint()
+	// 错误（无上游原文）走 noHealthyHint——裸名落错域时改写成带前缀的写法。
+	hint := h.noHealthyHint(peek.Model, realm, bareModel)
 	// upstreamMsgPassed 记录 error.message 是否已被上游原文占据：模型级阻塞分支
 	// 据此决定要不要覆盖 msg（上游原文优先，含 requestId）。
 	upstreamMsgPassed := false
@@ -1788,6 +1788,26 @@ func (h *Handler) hintContext(bareModel string, hasImage bool) upstream.HintCont
 		}
 	}
 	return ctx
+}
+
+// noHealthyHint 选号失败（no_healthy_account）的 gateway_hint。
+//
+// 裸模型名一律按 cn 域路由（resolveModel）：池里若只有另一域能服务该模型的号，
+// 选号必然失败，而固定文案指向的 /status 是健康的，客户端只会一直重试。仅在
+// 「请求是裸名」且「另一域有该模型的健康号」时改写为带前缀的写法；显式带前缀
+// 的请求不改写（前缀不是失败原因）。只改提示，不做跨域回退。
+func (h *Handler) noHealthyHint(routeModel, realm, bareModel string) string {
+	if routeModel != bareModel || h.cfg.Pool == nil {
+		return upstream.NoHealthyAccountHint()
+	}
+	other := "global"
+	if realm == "global" {
+		other = "cn"
+	}
+	if len(h.cfg.Pool.AvailableUIDsForModelRealm(bareModel, other)) > 0 {
+		return upstream.NoHealthyAccountHintForModel(bareModel, other)
+	}
+	return upstream.NoHealthyAccountHint()
 }
 
 // hintOf 末端错误透传的统一 hint 入口：kind + 上游原文 + 请求上下文 →
