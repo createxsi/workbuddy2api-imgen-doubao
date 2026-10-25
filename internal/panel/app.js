@@ -1229,7 +1229,10 @@ const CFG_MAP = {
   sanitize_blacklist_fingerprints: ['features', 'sanitize_blacklist_fingerprints'],
   session_sticky_enabled: ['session_sticky', 'enabled'],
   request_client_info: ['logging', 'request_client_info'],
+  models_hidden: ['models', 'hidden'], models_aliases: ['models', 'aliases'],
 };
+// 列表型文本字段：空串 = 显式清空（发空数组），否则删不掉最后一个条目。
+const LIST_CFG = { models_hidden: /[,，\s]+/, models_aliases: /[,，]+/ };
 /* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
  *
  * 其余文本字段保持「空 = 不下发」的既有语义——那是防误清空的保护，不是 bug：
@@ -1278,8 +1281,9 @@ function collectConfig() {
     else if (el.type === 'number') { v = el.value.trim() === '' ? undefined : Number(el.value); }
     else {
       const raw = el.value.trim();
+      if (LIST_CFG[name]) v = raw.split(LIST_CFG[name]).map(s => s.trim()).filter(Boolean);
       // 覆盖型字段空串照发（见 CLEARABLE_CFG）；其余空 = 不下发。
-      if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
+      else if (raw === '') v = CLEARABLE_CFG.has(name) ? '' : undefined;
       else if (name.endsWith('_hours')) v = raw.split(/[,，\s]+/).filter(Boolean).map(Number);
       else v = raw;
     }

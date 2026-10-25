@@ -485,6 +485,13 @@ type StreamOption func(*streamOptions)
 type streamOptions struct {
 	onErrorFrame func(payload string)
 	markup       *MarkupRepair
+	echoModel    string
+}
+
+// WithModelEcho 把所有出站帧的顶层 model 覆写为 name（models.aliases：客户端经别名点名时
+// 回显它自己发的名字，严格校验 model 的客户端不报错）。空串 = 不改。
+func WithModelEcho(name string) StreamOption {
+	return func(o *streamOptions) { o.echoModel = name }
 }
 
 // WithMarkupRepair 注册「模型原生工具调用标记」修复器（见 dsml.go）。
@@ -572,6 +579,9 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 	// 已用过的最大 tool_call index（供标记修复接续编号）。
 	// fallback 是规范化失败时的兜底原文（与修复前「marshal 失败即原样透传」一致）。
 	writeChunk := func(obj map[string]any, fallback string) error {
+		if o.echoModel != "" {
+			obj["model"] = o.echoModel
+		}
 		// 先按 index 收敛 tool_calls name（每 index 仅首片保留，后续分片删 name 键），再规范化透传。
 		stripToolCallNames(obj, toolCallSeen)
 		// id 续传：首帧非空真实 id 缓存；后续帧缺 id / 空 id 一律用缓存值，

@@ -51,3 +51,19 @@ func TestNormalizeHiddenModels(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeModelAliases(t *testing.T) {
+	got := NormalizeModelAliases([]string{" Claude-X = glm-5.2 ", "global:y=cn:hy3", "noeq", "=v", "k=", "same=SAME", "cn:=x", "Claude-X=hy3"})
+	want := map[string]string{"cn:claude-x": "hy3", "global:claude-x": "hy3", "global:y": "cn:hy3"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	}
+	if NormalizeModelAliases(nil) != nil {
+		t.Fatal("空输入应为 nil")
+	}
+}

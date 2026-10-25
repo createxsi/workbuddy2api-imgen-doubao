@@ -214,6 +214,9 @@ func (h *Handler) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 		// 按 realm 选默认模型：global → hy-image-3.5；cn → hunyuan-image-alpha。
 		bareModel = upstream.DefaultTextToImageModelFor(realm)
 	}
+	if h.rejectHiddenImageModel(w, realm, bareModel) {
+		return
+	}
 	upstreamBody, err := upstream.BuildImageUpstreamBody(&in, bareModel)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -333,6 +336,9 @@ func (h *Handler) imagesEdits(w http.ResponseWriter, r *http.Request) {
 		// 按 realm 选默认模型：global → hy-image-3.5；cn → hunyuan-image-alpha-edit。
 		bareModel = upstream.DefaultImageToImageModelFor(realm)
 	}
+	if h.rejectHiddenImageModel(w, realm, bareModel) {
+		return
+	}
 	upstreamBody, err := upstream.BuildImageEditUpstreamBody(&in, bareModel, images)
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -387,13 +393,20 @@ func (h *Handler) imagesModels(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		for _, mi := range h.generationModelsFor(realm) {
+			if h.hiddenModel(realm, mi.ID) {
+				continue
+			}
 			data = append(data, generationModelEntry(realm+":"+mi.ID, mi))
 		}
 	}
 	if len(data) == 0 {
 		// 探测全失败（无号/网络错/目录无生成类模型）：回落静态清单，
 		// 保证客户端至少能拿到可用的模型名（生图端点不看目录，指定名即可调用）。
-		data = generationModelStaticFallback()
+		for _, e := range generationModelStaticFallback() {
+			if realm, bare := resolveModel(e["id"].(string)); !h.hiddenModel(realm, bare) {
+				data = append(data, e)
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"object": "list", "data": data})
 }
@@ -495,4 +508,15 @@ func generationModelStaticFallback() []map[string]any {
 			"endpoints": []string{"POST /v1/images/generations"},
 		},
 	}
+}
+
+// rejectHiddenImageModel models.hidden 同样管出图入口：列表已隐藏的模型不能直接点名调用
+// （出图真扣积分，漏掉这里黑名单就可绕过）。已写出 400 时返回 true。
+func (h *Handler) rejectHiddenImageModel(w http.ResponseWriter, realm, bare string) bool {
+	if !h.hiddenModel(realm, bare) {
+		return false
+	}
+	writeOpenAIError(w, http.StatusBadRequest, "model_unavailable",
+		"model is hidden by gateway configuration, try another model")
+	return true
 }
