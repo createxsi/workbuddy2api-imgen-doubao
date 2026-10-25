@@ -400,6 +400,15 @@ type ModelBlockStatus struct {
 // 口径必须与选号一致：用 modelCooled 而非直接查 map，这样 AuditOnly 条目
 // （只审计不拦截）不会被误报成阻塞。
 func (p *Pool) ModelBlocked(model string) ModelBlockStatus {
+	return p.modelBlocked(model, "")
+}
+
+// ModelBlockedForRealm 同 ModelBlocked，但只看该域（cn/global）的账号。
+func (p *Pool) ModelBlockedForRealm(model, realm string) ModelBlockStatus {
+	return p.modelBlocked(model, realm)
+}
+
+func (p *Pool) modelBlocked(model, realm string) ModelBlockStatus {
 	if model == "" {
 		return ModelBlockStatus{}
 	}
@@ -413,6 +422,9 @@ func (p *Pool) ModelBlocked(model string) ModelBlockStatus {
 		// 证明不成立——否则一个暂停的健康号会掩盖「其余号全被模型级冷却挡住」。
 		if e.disabled || e.paused {
 			continue // 禁用/暂停号不参与：它们的不可用与模型无关
+		}
+		if realm != "" && e.a.Realm() != realm {
+			continue
 		}
 		if !e.modelCooled(now, model) {
 			// 还有账号能服务这个模型 → 不是模型级阻塞。

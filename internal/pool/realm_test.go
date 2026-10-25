@@ -152,3 +152,16 @@ func TestPickExcludingForRealmTried(t *testing.T) {
 		t.Fatalf("picked non-cn %s", a.UID)
 	}
 }
+
+// ModelBlockedForRealm 只看该域账号：cn 全被模型级冷却挡住时 cn 判阻塞，global 不受影响。
+func TestModelBlockedForRealm(t *testing.T) {
+	p := realmPool(t)
+	p.CooldownModelBusy("cn1", "m", "14003 model busy")
+	p.CooldownModelBusy("cn2", "m", "14003 model busy")
+	if !p.ModelBlockedForRealm("m", "cn").Blocked {
+		t.Fatal("cn 两号都冷却应判阻塞")
+	}
+	if p.ModelBlockedForRealm("m", "global").Blocked || p.ModelBlocked("m").Blocked {
+		t.Fatal("global 号仍可服务，不应判阻塞")
+	}
+}
