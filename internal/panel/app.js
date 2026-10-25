@@ -3,7 +3,7 @@
 const LS_KEY = 'wb2api.key', LS_THEME = 'wb2api.theme';
 let theme = localStorage.getItem(LS_THEME) || 'auto';   // auto | light | dark
 let view = 'accounts';
-let overviewData = null, cfgLoaded = null;
+let overviewData = null, cfgLoaded = null, updateData = null, updateBusy = false;
 let logPin = true, loginState = null, loginTimer = null;
 let refTimer = null;
 /* 视图级筛选状态（模块级声明放在文件顶部，避免顶层 go() 早于声明执行时踩 TDZ）。 */
@@ -516,6 +516,92 @@ function renderModelLocks(rows) {
   }
 }
 
+/* ── 版本与更新 ─────────────────────────────────────────────────────── */
+function displayVersion(version) {
+  const v = String(version || 'dev').replace(/^v/, '');
+  return v === 'dev' ? 'dev' : 'v' + v;
+}
+/* updateNoteText 更新状态的一行说明（纯函数，便于测试）。 */
+function updateNoteText(u) {
+  if (!u) return '';
+  if (u.installing) return '正在准备更新…';
+  if (u.last_error) return '更新检查/安装失败：' + u.last_error;
+  if (u.update_available) {
+    return '发现新版本 v' + u.latest_version + (u.can_install ? '' : ' · ' + (u.install_blocked || '请手动更新'));
+  }
+  if (u.latest_version) return '已是最新版本 · v' + u.latest_version;
+  return '尚未检查';
+}
+function renderUpdateStatus(u) {
+  if (!u) return;
+  updateData = u;
+  const local = displayVersion(u.current_version);
+  $('navSub').textContent = local;
+  $('navVer').textContent = local;
+  const badge = $('navUpdate');
+  if (badge) {
+    badge.hidden = !u.update_available;
+    badge.title = u.update_available ? '发现 v' + u.latest_version + '，点击查看' : '';
+  }
+  if (!$('updateNote')) return;
+  $('updateNote').textContent = updateNoteText(u);
+  const avail = !!u.update_available, busy = updateBusy || !!u.installing;
+  $('btnUpdateInstall').hidden = !avail || !u.can_install;
+  $('btnUpdateInstall').disabled = busy;
+  $('btnUpdateDownload').hidden = !avail || !!u.can_install || !u.download_url;
+  $('btnUpdateRelease').hidden = !avail || !!u.can_install || !u.release_url;
+  $('btnUpdateCheck').disabled = busy;
+}
+async function checkForUpdates() {
+  if (updateBusy || (updateData && updateData.installing)) return;
+  updateBusy = true;
+  const b = $('btnUpdateCheck');
+  b.disabled = true; b.textContent = '检查中…';
+  try {
+    const u = await api('update/check', { method: 'POST' });
+    renderUpdateStatus(u);
+    toast(u.update_available ? '发现新版本 v' + u.latest_version : '当前已是最新版本', u.update_available ? 'ok' : '');
+  } catch (e) {
+    try { renderUpdateStatus(await api('update')); } catch (_) { /* 保持原状态 */ }
+    toast('检查更新失败：' + e.message, 'err');
+  } finally {
+    updateBusy = false;
+    b.textContent = '检查更新';
+    if (updateData) renderUpdateStatus(updateData);
+  }
+}
+async function installUpdate() {
+  const u = updateData;
+  if (updateBusy || !u || u.installing || !u.can_install || !u.update_available) return;
+  if (!confirm('将安装 v' + u.latest_version + ' 并重启服务，期间服务会短暂中断。确认继续？')) return;
+  updateBusy = true;
+  const b = $('btnUpdateInstall');
+  b.disabled = true; b.textContent = '准备更新…';
+  try {
+    const r = await api('update/install', { method: 'POST' });
+    renderUpdateStatus(r.status);
+    toast('更新已就绪，服务即将重启', 'ok');
+  } catch (e) {
+    toast('更新失败：' + e.message, 'err');
+  } finally {
+    updateBusy = false;
+    b.textContent = '立即更新';
+    if (updateData) renderUpdateStatus(updateData);
+  }
+}
+function openUpdateLink(key) {
+  if (updateData && updateData[key]) window.open(updateData[key], '_blank', 'noopener');
+}
+if ($('btnUpdateCheck')) $('btnUpdateCheck').onclick = checkForUpdates;
+if ($('btnUpdateInstall')) $('btnUpdateInstall').onclick = installUpdate;
+if ($('btnUpdateDownload')) $('btnUpdateDownload').onclick = () => openUpdateLink('download_url');
+if ($('btnUpdateRelease')) $('btnUpdateRelease').onclick = () => openUpdateLink('release_url');
+if ($('navUpdate')) $('navUpdate').onclick = () => {
+  go('config');
+  history.replaceState(null, '', '#config');
+  if ($('updateNote')) $('updateNote').scrollIntoView({ block: 'center', behavior: 'smooth' });
+};
+
 async function loadOverview(quiet) {
   try {
     const d = await api('overview');
@@ -530,8 +616,12 @@ async function loadOverview(quiet) {
   const totSum = (d.accounts || []).reduce((a, s) => a + (s.credits_total || 0), 0);
   $('sCredits').textContent = totSum > 0 ? remSum + ' / ' + totSum : remSum;
     $('sSticky').textContent = d.sticky_sessions;
-    $('navSub').textContent = 'v' + d.version;
-    $('navVer').textContent = 'v' + d.version;
+    const prevUpdate = updateData;
+    renderUpdateStatus(d.update || { current_version: d.version });
+    if (d.update && d.update.update_available &&
+      (!prevUpdate || !prevUpdate.update_available || prevUpdate.latest_version !== d.update.latest_version)) {
+      toast('发现新版本 v' + d.update.latest_version, 'ok');
+    }
     $('navRedis').textContent = d.redis_mode === 'upstash' ? 'Redis 镜像' : '本地内存';
     $('navState').textContent = d.healthy > 0 ? '服务正常' : (d.total ? '无可用账号' : '待添加账号');
     const p = $('navPulse');
@@ -1070,6 +1160,7 @@ $('btnLogPin').onclick = () => {
 const CFG_MAP = {
   listen: ['listen'], api_key: ['api_key'],
   package_detail_limit: ['panel', 'package_detail_limit'],
+  update_auto_enabled: ['update', 'auto_enabled'], update_auto_time: ['update', 'auto_time'],
   checkin_hours: ['schedule', 'checkin_hours'], checkin_enabled: ['schedule', 'checkin_enabled'], growth_hours: ['schedule', 'growth_hours'], growth_enabled: ['schedule', 'growth_enabled'],
   travel_hours: ['schedule', 'travel_hours'], travel_enabled: ['schedule', 'travel_enabled'],
   activity_hours: ['schedule', 'activity_hours'], activity_enabled: ['schedule', 'activity_enabled'],

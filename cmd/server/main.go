@@ -26,6 +26,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/scheduler"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/server"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/updater"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
 )
@@ -48,6 +49,14 @@ func stateSibling(stateFile, name string) string {
 }
 
 func main() {
+	// 更新进程协议（私有参数）必须先于 flag 解析处理。
+	if handled, err := updater.HandleSelfUpdate(os.Args); handled {
+		if err != nil {
+			log.Printf("[updater] %v", err)
+			os.Exit(1)
+		}
+		return
+	}
 	cfgPath := flag.String("config", "config.json", "配置文件路径（默认当前目录 config.json；不存在时自动生成推荐配置）")
 	flag.Parse()
 
@@ -266,6 +275,10 @@ func main() {
 		log.Printf("[reqlog] 请求指标已启用；JSONL 归档已关闭")
 	}
 
+	updateManager := updater.New(appVersion, updater.DefaultRepository, updater.Settings{
+		AutoEnabled: cfg.Update.AutoEnabled,
+		AutoTime:    cfg.Update.AutoTime,
+	})
 	pn := panel.New(panel.Config{
 		Pool:        p,
 		Usage:       rec,
@@ -277,6 +290,7 @@ func main() {
 		RedisMode:   redisMode,
 		StickyCount: sessCount,
 		Version:     appVersion,
+		Updater:     updateManager,
 		Live:        live,
 		// 模型上限探测数据（scripts/probe_max_tokens.py --panel-out 写入）：
 		// 与 state 文件同目录，缺省 data/output_probes.json。
@@ -286,7 +300,17 @@ func main() {
 			return Load(*cfgPath)
 		},
 		SaveConfig: func(raw []byte) ([]string, error) {
-			return saveConfig(raw, *cfgPath, live, p, up, sch)
+			fields, err := saveConfig(raw, *cfgPath, live, p, up, sch)
+			if err != nil {
+				return nil, err
+			}
+			// update.* 热生效：以落盘后的配置为准。
+			if saved, lerr := Load(*cfgPath); lerr == nil {
+				updateManager.Configure(updater.Settings{AutoEnabled: saved.Update.AutoEnabled, AutoTime: saved.Update.AutoTime})
+			} else {
+				log.Printf("WARN: reload update settings: %v", lerr)
+			}
+			return fields, nil
 		},
 	})
 	// 成长任务队列每日自动执行（与「执行全部待办」同管线）：Sequential 族零点解锁后
@@ -321,6 +345,9 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// 更新就绪后走与 SIGTERM 相同的优雅停机，由更新进程替换程序并重新拉起。
+	updateManager.SetRestart(stop)
+	go updateManager.Run(ctx)
 	sch.SetBalanceJitter(cfg.Schedule.BalanceRefreshJitterPermill)
 	sch.SetNightAccountCap(cfg.Schedule.NightAccountCap)
 	if cfg.Schedule.BalanceRefreshJitterPermill > 0 {
@@ -355,7 +382,9 @@ func main() {
 		// （长流式生成合法时长可达数分钟，全局 WriteTimeout 会误杀在途 SSE）。
 		IdleTimeout: 120 * time.Second,
 	}
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-ctx.Done()
 		p.Flush() // 信号触发：先落盘再做优雅停机
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -366,6 +395,9 @@ func main() {
 	log.Printf("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
+	}
+	if ctx.Err() != nil {
+		<-shutdownDone // 等优雅停机收尾，再退出进程（更新进程据此判定旧进程已退出）
 	}
 	log.Printf("bye")
 }

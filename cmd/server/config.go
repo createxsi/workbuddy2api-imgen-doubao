@@ -27,6 +27,13 @@ type Config struct {
 		PackageDetailLimit int `json:"package_detail_limit"`
 	} `json:"panel"`
 
+	// Update 版本更新：面板始终检测新版并提醒；AutoEnabled 时每天在 AutoTime（北京时间）
+	// 自动安装。原地安装仅原生 Linux/Windows 二进制支持，其余环境只提示。
+	Update struct {
+		AutoEnabled bool   `json:"auto_enabled"` // 缺省 false
+		AutoTime    string `json:"auto_time"`    // HH:MM，缺省 04:00
+	} `json:"update"`
+
 	Logging struct {
 		// RequestArchiveEnabled 请求元数据 JSONL 归档开关，缺省 true。
 		RequestArchiveEnabled bool `json:"request_archive_enabled"`
@@ -272,6 +279,7 @@ func Default() *Config {
 	c.Cooldown.SoftRateMax = "2h"
 	c.Server.ReadTimeout = "300s"
 	c.Panel.PackageDetailLimit = 5
+	c.Update.AutoTime = "04:00"
 	c.Logging.RequestArchiveEnabled = true
 	c.Logging.RequestRetentionDays = 7
 	c.Logging.RequestArchiveMaxMB = 100
@@ -496,6 +504,12 @@ func (c *Config) normalize() error {
 	if c.Panel.PackageDetailLimit <= 0 {
 		c.Panel.PackageDetailLimit = 5
 	}
+	if strings.TrimSpace(c.Update.AutoTime) == "" {
+		c.Update.AutoTime = "04:00"
+	}
+	if !isClockTime(c.Update.AutoTime) {
+		return fmt.Errorf("update.auto_time: %q 不是合法时间（HH:MM，北京时间）", c.Update.AutoTime)
+	}
 	if c.Logging.RequestRetentionDays <= 0 {
 		c.Logging.RequestRetentionDays = 7
 	}
@@ -702,4 +716,19 @@ func checkHourRange(field, switchKey string, hours []int) error {
 		}
 	}
 	return nil
+}
+
+// isClockTime 校验 HH:MM（00:00–23:59）。
+func isClockTime(v string) bool {
+	if len(v) != 5 || v[2] != ':' {
+		return false
+	}
+	for _, i := range []int{0, 1, 3, 4} {
+		if v[i] < '0' || v[i] > '9' {
+			return false
+		}
+	}
+	h, _ := strconv.Atoi(v[:2])
+	m, _ := strconv.Atoi(v[3:])
+	return h <= 23 && m <= 59
 }

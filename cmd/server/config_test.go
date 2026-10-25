@@ -898,3 +898,26 @@ func TestScheduleHumanizeConfig(t *testing.T) {
 		t.Fatalf("env 覆盖失败：%+v", c3.Schedule)
 	}
 }
+
+func TestUpdateConfig(t *testing.T) {
+	c := Default()
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Update.AutoEnabled || c.Update.AutoTime != "04:00" {
+		t.Fatalf("缺省应关闭、04:00：%+v", c.Update)
+	}
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+	os.WriteFile(fp, []byte(`{"update":{"auto_enabled":true,"auto_time":"23:15"}}`), 0o600)
+	c2, err := Load(fp)
+	if err != nil || !c2.Update.AutoEnabled || c2.Update.AutoTime != "23:15" {
+		t.Fatalf("解析失败：%v %+v", err, c2)
+	}
+	for _, bad := range []string{"24:00", "4:00", "04:60", "ab:cd"} {
+		os.WriteFile(fp, []byte(`{"update":{"auto_time":"`+bad+`"}}`), 0o600)
+		if _, err := Load(fp); err == nil {
+			t.Errorf("auto_time=%q 应报错", bad)
+		}
+	}
+}
