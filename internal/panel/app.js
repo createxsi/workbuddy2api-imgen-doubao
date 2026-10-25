@@ -457,22 +457,25 @@ function renderAccounts(list) {
         '<span class="usage-item usage-rate"><b>' + rate + '</b></span>' +
       '</span></td>' +
       '<td class="num" style="color:var(--ink-3)">' + ago(s.last_success) + '</td>' +
-      '<td class="acts">' +
+      '<td class="acts"><div class="acts-inner">' + [
         // 企业版无个人成长体系（签到 400「企业账号不支持该操作」/ 成长任务 403）：
         // 不渲染「签到」「任务」按钮，只留「额度」——点它走 /balance，企业额度由
         // upstream 的 get-enterprise-user-usage 口径填充。
+        // 七个动作按固定槽位输出（签到/余额/刷新/任务/选号/禁用/移除），缺位留空 span，
+        // CSS grid 固定列宽，逐行对齐。
         (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>') +
-        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>' +
-        '<button class="xs ghost" data-a="refresh" data-u="' + esc(s.uid) + '" title="强制刷新登录 token（12153 / 401 掉线时先试这个）">刷新</button>' +
+          '<button class="xs ghost" data-a="checkin" data-u="' + esc(s.uid) + '"' + (s.checkin_done ? ' title="今日已签到；点击可重新签到并刷新余额"' : '') + '>' + (s.checkin_done ? '已签' : '签到') + '</button>'),
+        '<button class="xs ghost" data-a="balance" data-u="' + esc(s.uid) + '"' + (s.enterprise ? ' title="刷新企业版已分配额度（上游 get-enterprise-user-usage）"' : '') + '>' + (s.enterprise ? '额度' : '余额') + '</button>',
+        '<button class="xs ghost" data-a="refresh" data-u="' + esc(s.uid) + '" title="强制刷新登录 token（12153 / 401 掉线时先试这个）">刷新</button>',
         (s.enterprise ? '' :
-          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>') +
+          '<button class="xs ghost" data-a="tasks" data-u="' + esc(s.uid) + '">任务</button>'),
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
-                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')) +
-        (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>') +
-        '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>' +
-      '</td></tr>';
+                            : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')),
+        (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
+        '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>',
+      ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
+      '</div></td></tr>';
   }).join(''));
 }
 
@@ -1929,17 +1932,40 @@ function qrowHTML(it) {
     '<span class="msg">' + esc(it.message || '') + '</span>' +
     '</div>';
 }
+/* 任务中心筛选：默认收起「已完成」与「该账号无此任务」两类噪音行。
+   开关只影响渲染，不重新请求；状态存本机。 */
+const LS_TC_HIDE_DONE = 'wb2api.tc.hideDone', LS_TC_HIDE_NA = 'wb2api.tc.hideNa';
+let tcHideDone = localStorage.getItem(LS_TC_HIDE_DONE) !== '0';
+let tcHideNa = localStorage.getItem(LS_TC_HIDE_NA) !== '0';
+let tcLastRender = null; // 最近一次 renderQueue 的入参，供切换开关时原地重绘
+const TC_NA_MESSAGE = '该账号无此任务';
+// 不适用行在队列里也是 done 态：只受「隐藏不适用」控制，不被「隐藏已完成」连带。
+function tcRowHidden(row) {
+  if (String(row.message || '').trim() === TC_NA_MESSAGE) return tcHideNa;
+  return tcHideDone && row.status === 'done';
+}
 function renderQueue(groups, progress, emptyTitle, emptyDesc) {
+  tcLastRender = { groups, progress, emptyTitle, emptyDesc };
+  const rawRows = groups.reduce((n, g) => n + g.rows.length, 0);
+  groups = groups
+    .map(g => Object.assign({}, g, { rows: g.rows.filter(row => !tcRowHidden(row)) }))
+    .filter(g => g.rows.length);
+  const hiddenRows = rawRows - groups.reduce((n, g) => n + g.rows.length, 0);
   const empty = $('tcEmpty'), list = $('qcList');
   if (!groups.length) {
     empty.style.display = '';
-    if (emptyTitle) empty.querySelector('.t').textContent = emptyTitle;
-    if (emptyDesc) empty.querySelector('.d').textContent = emptyDesc;
+    if (rawRows) {
+      empty.querySelector('.t').textContent = '当前筛选下没有任务';
+      empty.querySelector('.d').textContent = '已隐藏 ' + rawRows + ' 行（已完成 / 该账号无此任务），取消上方勾选即可查看。';
+    } else {
+      if (emptyTitle) empty.querySelector('.t').textContent = emptyTitle;
+      if (emptyDesc) empty.querySelector('.d').textContent = emptyDesc;
+    }
     list.innerHTML = '';
-    $('qProg').hidden = true; $('qcSummary').textContent = '';
+    $('qcSummary').textContent = hiddenRows ? '已隐藏 ' + hiddenRows : '';
+    if (progress) updateProgress(progress); else $('qProg').hidden = true;
     return;
   }
-  empty.style.display = 'none';
   empty.style.display = 'none';
   let total = 0;
   list.innerHTML = groups.map(g => {
@@ -1947,9 +1973,18 @@ function renderQueue(groups, progress, emptyTitle, emptyDesc) {
     return '<div class="qgroup"><header><span class="nm">' + esc(g.nick || g.uid.slice(0, 12)) + '</span><span class="cnt">' + g.rows.length + ' 项待办</span></header>' +
       g.rows.map(qrowHTML).join('') + '</div>';
   }).join('');
-  $('qcSummary').textContent = total + ' 项';
+  $('qcSummary').textContent = total + ' 项' + (hiddenRows ? ' · 已隐藏 ' + hiddenRows : '');
   updateProgress(progress);
 }
+function syncTcFilter(kind) {
+  if (kind === 'done') localStorage.setItem(LS_TC_HIDE_DONE, tcHideDone ? '1' : '0');
+  if (kind === 'na') localStorage.setItem(LS_TC_HIDE_NA, tcHideNa ? '1' : '0');
+  if (tcLastRender) renderQueue(tcLastRender.groups, tcLastRender.progress, tcLastRender.emptyTitle, tcLastRender.emptyDesc);
+}
+$('tcHideDone').checked = tcHideDone;
+$('tcHideNa').checked = tcHideNa;
+$('tcHideDone').onchange = ev => { tcHideDone = ev.target.checked; syncTcFilter('done'); };
+$('tcHideNa').onchange = ev => { tcHideNa = ev.target.checked; syncTcFilter('na'); };
 function updateProgress(q) {
   if (!q || !q.items) { $('qProg').hidden = true; return; }
   const total = q.items.length;

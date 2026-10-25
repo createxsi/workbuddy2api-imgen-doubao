@@ -302,6 +302,13 @@ label.fld > .hint { display: block; font-size: 11.5px; color: var(--ink-3); marg
 .rate-limit .ml-unlock { margin-left: auto; padding: 0 6px; font-size: 11px; line-height: 1.6; }
 .acts { display: flex; gap: 5px; justify-content: flex-end; white-space: nowrap; }
 .acts button { padding: 3.5px 8px; font-size: 12.5px; white-space: nowrap; flex: none; }
+/* 表格操作列 td.acts：通用 .acts 的 display:flex 会让 td 退出表格布局、垂直居中失效，
+   这里恢复 table-cell；按钮排列交给内层 .acts-inner。 */
+td.acts { display: table-cell; vertical-align: middle; text-align: right; }
+/* 账号池操作列固定槽位（签到/余额/刷新/任务/选号/禁用/移除），缺位留空槽，
+   解冻/暂停/恢复互斥或企业号缺签到/任务时整列仍对齐。 */
+.acts-inner { display: grid; grid-template-columns: repeat(4, 54px) 68px repeat(2, 54px); gap: 5px; justify-content: end; align-items: center; }
+.acts-inner button { width: 100%; height: 26px; box-sizing: border-box; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 
 .empty { padding: 40px 20px; text-align: center; color: var(--ink-3); }
 .empty .big { font-size: 14px; color: var(--ink-2); margin-bottom: 6px; }
@@ -729,6 +736,8 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
           <h3>成长任务队列 <span class="hint" id="qcSummary"></span></h3>
           <span class="grow"></span>
           <button class="xs" id="btnSchoolVouchers" title="开学季抽奖抽中的第三方券码（活动已结束，历史券码仍可查）">查询券码</button>
+          <label class="sel-note" title="隐藏状态为「完成」的任务行"><input type="checkbox" id="tcHideDone" checked> 隐藏已完成</label>
+          <label class="sel-note" title="隐藏「该账号无此任务」的任务行"><input type="checkbox" id="tcHideNa" checked> 隐藏不适用</label>
           <label class="sel-note">并发
             <select id="qcConc"><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select>
           </label>
