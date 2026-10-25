@@ -68,7 +68,7 @@ const ctx = { Number, String, Math, Date, Map, Array, Object, Infinity, esc: s =
   localStorage: { getItem: () => null }, $: id => (els[id] = els[id] || { innerHTML: '' }) };
 vm.createContext(ctx);
 vm.runInContext("'use strict';\n" + src.slice(start, end) +
-  '\nthis.bhDayKey=bhDayKey; this.bhMonthFlow=bhMonthFlow; this.renderBalanceChart=renderBalanceChart; this.renderBalanceDaily=renderBalanceDaily; this.bhPickRealm=bhPickRealm; this.bhAcctMark=bhAcctMark;', ctx);
+  '\nthis.bhDayKey=bhDayKey; this.bhMonthFlow=bhMonthFlow; this.renderBalanceChart=renderBalanceChart; this.renderBalanceDaily=renderBalanceDaily; this.bhPickRealm=bhPickRealm; this.bhAcctMark=bhAcctMark; this.bhUsableCount=bhUsableCount;', ctx);
 const now = Date.parse('2026-10-25T17:30:00Z'); // 北京时间 10-26 01:30
 const s = { uid: 'u1', current: 90, daily: [
   { day: '2026-09-30', consumed: 99, gained: 1 },
@@ -84,6 +84,7 @@ process.stdout.write(JSON.stringify({
   chart: els.bhChart.innerHTML.includes('<polyline') && els.bhChart.innerHTML.includes('#123456'),
   daily: (els.bhDaily.innerHTML.match(/<rect/g) || []).length === 6,
   realm: ctx.bhPickRealm([{ realm: 'global' }]),
+  usable: ctx.bhUsableCount([{ uid: 'u1' }, { uid: 'u2' }]) === 1,
   mark: ctx.bhAcctMark('u2').includes('上游封禁') && ctx.bhAcctMark('u1') === '',
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "bh-*.cjs")
@@ -98,7 +99,7 @@ process.stdout.write(JSON.stringify({
 	if err != nil {
 		t.Fatalf("node: %v\n%s", err, out)
 	}
-	const want = `{"day":"2026-10-26","month":true,"chart":true,"daily":true,"realm":"global","mark":true}`
+	const want = `{"day":"2026-10-26","month":true,"chart":true,"daily":true,"realm":"global","usable":true,"mark":true}`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("got %s want %s", out, want)
 	}

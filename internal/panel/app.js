@@ -298,6 +298,13 @@ function disabledKind(reason) {
   if (/manual|手动/.test(r)) return { label: '手动禁用', tone: 'warn', action: '随时可解冻' };
   return { label: '已禁用', tone: 'warn', action: '' };
 }
+const PROBE_BAN_TEXT = {
+  lifted: ['上游已可用，可以点「解冻」恢复', 'ok'],
+  still_banned: ['仍被封禁，继续等待（勿反复解冻，可能加重风控）', 'err'],
+  blocked: ['会话有效但请求被上游拦截（可能仍是封禁），继续观察', 'err'],
+  session_dead: ['不是封禁：登录态已失效，需重新登录', 'err'],
+  inconclusive: ['探测无明确结论（网络/限流等），稍后再试', 'err'],
+};
 // disabledAge 禁用时长：刚禁和禁了一周的处置优先级不同。
 function disabledAge(at, now) {
   const t = Date.parse(at || '');
@@ -498,7 +505,9 @@ function renderAccounts(list) {
         (frozen ? '<button class="xs primary" data-a="revive" data-u="' + esc(s.uid) + '">解冻</button>'
                 : (s.paused ? '<button class="xs primary" data-a="resume" data-u="' + esc(s.uid) + '">恢复选号</button>'
                             : '<button class="xs ghost" data-a="pause" data-u="' + esc(s.uid) + '" title="' + (s.enterprise ? '退出选号，但照常保活 / 刷新额度' : '退出选号，但照常签到 / 活跃上报 / 保活 / 刷新余额') + '">暂停选号</button>')),
-        (s.disabled ? '' : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
+        // 禁用账号的「禁用」槽改放「探活」：只读探测上游是否已解封，不解冻、不改状态。
+        (s.disabled ? '<button class="xs ghost" data-a="probe_ban" data-u="' + esc(s.uid) + '" title="只读探测上游是否已解封：不解冻、不参与选号、不改任何状态">探活</button>'
+                    : '<button class="xs ghost" data-a="disable" data-u="' + esc(s.uid) + '">禁用</button>'),
         '<button class="xs ghost danger" data-a="remove" data-u="' + esc(s.uid) + '">移除</button>',
       ].map(html => html || '<span class="slot" aria-hidden="true"></span>').join('') +
       '</div></td></tr>';
@@ -693,6 +702,11 @@ $('accBody').addEventListener('click', async ev => {
     } else if (a === 'revive') {
       await api('accounts/' + encodeURIComponent(u) + '/revive', { method: 'POST' });
       toast('已解冻', 'ok');
+    } else if (a === 'probe_ban') {
+      const r = await api('accounts/' + encodeURIComponent(u) + '/probe_ban', { method: 'POST' });
+      const m = PROBE_BAN_TEXT[r.verdict] || [r.verdict + (r.detail ? '：' + r.detail : ''), 'err'];
+      toast(m[0], m[1]);
+      return; // 探测不改池状态，无需刷新列表
     } else if (a === 'disable') {
       await api('accounts/' + encodeURIComponent(u) + '/disable', { method: 'POST' });
       toast('已禁用', 'ok');
@@ -3368,6 +3382,10 @@ function bhAccountRow(s, color, nowMs) {
     bhFlowCell(today && { v: today.gained, full: today.full }, { v: mo.gained, days: mo.days, covered: mo.covered, first: mo.first }) +
     '<td class="num">' + (s.points || []).length + '</td></tr>';
 }
+// bhUsableCount 当前可用（未禁用且未暂停）的账号数；无状态记录的按可用计。
+function bhUsableCount(rows) {
+  return rows.filter(s => { const a = bhAcctState(s.uid); return !a || (!a.disabled && !a.paused); }).length;
+}
 // bhAcctMark 账号已禁用/暂停时在名字后标注：曲线停更的原因要看得见。
 function bhAcctMark(uid) {
   const a = bhAcctState(uid);
@@ -3398,8 +3416,11 @@ async function loadBalance() {
     renderBalanceDaily(rows);
     let total = 0, delta = 0, pts = 0;
     rows.forEach(s => { total += Number(s.current || 0); delta += Number(s.change || 0); pts += (s.points || []).length; });
+    // 可用账号数（未禁用且未暂停）：合计余额含已停用号的残留，要并排看「几个号在扛」。
+    const usable = bhUsableCount(rows);
     $('bhStats').innerHTML =
       usKpi(String(rows.length), '账号（' + bhRealmLabel(bhRealm) + '）', 'c-accent') +
+      usKpi(usable + '/' + rows.length, '可用账号', usable < rows.length ? 'c-bad' : 'c-ok', '未禁用且未暂停') +
       usKpi(bhNum(total), '当前合计', 'c-accent') +
       usKpi((delta > 0 ? '+' : '') + bhNum(delta), '窗口净变化', delta > 0 ? 'c-ok' : delta < 0 ? 'c-bad' : 'c-mute') +
       usKpi(bhNum(pts), '采样点', 'c-soft');
