@@ -24,3 +24,8 @@ func resolveModel(model string) (realm, bare string) {
 
 // ResolveModel 是 resolveModel 的导出面（跨包调用）。
 func ResolveModel(model string) (realm, bare string) { return resolveModel(model) }
+
+// hasRealmPrefix 模型名是否显式带 cn:/global: 域前缀。
+func hasRealmPrefix(model string) bool {
+	return strings.HasPrefix(model, "cn:") || strings.HasPrefix(model, "global:")
+}

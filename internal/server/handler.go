@@ -175,6 +175,8 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("POST /v1/search", h.withAuth(h.webSearch))
 	h.mux.HandleFunc("POST /v1/webfetch", h.withAuth(h.webFetch))
 	h.mux.HandleFunc("POST /v1/fetch", h.withAuth(h.deepSeekFetch))
+	// 官方客户端的「模型忙」预检：本地按池台账算，不打上游（见 busy.go）。
+	h.mux.HandleFunc("POST /v2/chat/busy", h.withAuth(h.chatBusy))
 	// 生图（OpenAI Images API 兼容）：转发到账号 realm 对应的上游
 	// /v2/images/generations（global = www.workbuddy.ai，即桌面版 WorkBuddyAI
 	// ImageGen 的同域端点）。选号/轮转/错误处置与 chat 同链路。
@@ -615,7 +617,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// modelEcho 非空 = 走了映射，响应里的 model 回写客户端原发名。
 	modelEcho, routeModel := "", peek.Model
 	if target, ok := h.modelAlias(realm, bareModel); ok {
-		if !strings.HasPrefix(target, "cn:") && !strings.HasPrefix(target, "global:") {
+		if !hasRealmPrefix(target) {
 			target = realm + ":" + target
 		}
 		realm, bareModel = resolveModel(target)
