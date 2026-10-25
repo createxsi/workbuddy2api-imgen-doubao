@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/balance"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
@@ -24,8 +25,10 @@ import (
 // 任务开关用「禁用」命名而非「启用」：零值 Config 即四类任务都启用（hours 回落默认），
 // 与引入开关前的行为逐字一致（老调用方/老测试无需改动）。
 type Config struct {
-	Pool           *pool.Pool
-	Upstream       *upstream.Client
+	Pool     *pool.Pool
+	Upstream *upstream.Client
+	// Balance 余额趋势采样（nil = 不采样）：挂在余额刷新之后，不额外打上游。
+	Balance        *balance.Recorder
 	CheckinHours   []int // 默认 [9, 21]
 	TravelHours    []int // 默认 [9,21]：一趟派出 + 一趟领奖闭环
 	ActivityHours  []int // 默认 [10]
@@ -690,6 +693,7 @@ func (s *Scheduler) runBalanceRefresh(ctx context.Context, window time.Duration,
 			}
 			s.cfg.Pool.ReenableIfCredits(uid, remain, total)
 			s.cfg.Pool.SetCreditsDetailed(uid, remain, total, expiring, earliestAt, earliestRemaining)
+			SampleBalance(s.cfg.Balance, uid, a.Nickname, a.Realm(), remain, total)
 		}(a, st.UID, staggerDelay(window, round, st.UID))
 	}
 	wg.Wait()
@@ -750,4 +754,18 @@ func (s *Scheduler) SetBalanceInterval(d time.Duration) {
 	}
 	s.balanceInterval.Store(int64(d))
 	poke(s.rearmBalance)
+}
+
+// enterpriseUnlimited 企业不限量账号的余额哨兵下限（upstream 以 1<<40 表示不限量）。
+const enterpriseUnlimited int64 = 1 << 40
+
+// SampleBalance 记录一个余额趋势采样点（rec 内部按账号节流）。企业不限量
+// （total<0 或哨兵余额）没有水位可言，跳过。
+func SampleBalance(rec *balance.Recorder, uid, nickname, realm string, remain, total int64) {
+	if rec == nil || total < 0 || remain >= enterpriseUnlimited {
+		return
+	}
+	rec.SetName(uid, nickname)
+	rec.SetRealm(uid, realm)
+	rec.Add(uid, remain)
 }

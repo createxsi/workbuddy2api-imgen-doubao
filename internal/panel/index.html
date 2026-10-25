@@ -468,6 +468,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
   .uschart-body .tk-peak { fill: var(--ink-2); font: 600 10px var(--mono); }
   .uschart-body rect.usbar { transition: opacity .12s; }
   .uschart-body rect.usbar:hover { opacity: .78; }
+  .bh-up { color: var(--ok); } .bh-down { color: var(--bad); } .bh-flat, .bh-na { color: var(--ink-3); }
+  .bh-dim { opacity: .55; } .bh-flow small { color: var(--ink-3); }
+  .bh-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
   .uschart-body .us-empty { padding: 30px 0; text-align: center; color: var(--ink-3); font-size: 12.5px; }
 
   /* 用量表内的 prompt/completion 占比条。用 .us-mix 而不是复用账号池的 .bar：
@@ -631,6 +634,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
       <li><a href="#packages" data-view="packages">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2.2 5.4 8 2.5l5.8 2.9v5.2L8 13.5l-5.8-2.9z"/><path d="M2.2 5.4 8 8.3l5.8-2.9M8 8.3v5.2"/></svg>
         积分构成</a></li>
+      <li><a href="#balhist" data-view="balhist">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 13.5h12"/><path d="M2.5 10.5 6 7l2.5 2.5L13.5 4"/></svg>
+        余额趋势</a></li>
       <li><a href="#taskscenter" data-view="taskscenter">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 2.5h10v9H8l-3 3v-3H3z"/><path d="M6 6.5h4M6 9h2.5"/></svg>
         任务中心</a></li>
@@ -847,6 +853,44 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         <div class="pad"><div class="pk-grid" id="pkSummary"></div></div>
       </div>
       <div id="pkDetail"></div>
+    </section>
+
+    <!-- 余额趋势 -->
+    <section class="view" id="view-balhist" hidden>
+      <div class="box">
+        <header>
+          <h3>余额趋势</h3>
+          <span class="vtabs" id="bhRealmTabs"></span>
+          <span class="grow"></span>
+          <span class="note" id="bhNote">—</span>
+          <select id="bhWindow" class="xs" title="时间窗口">
+            <option value="1">近 24 小时</option>
+            <option value="7">近 7 天</option>
+            <option value="30" selected>近 30 天</option>
+          </select>
+          <button class="xs" id="btnBh">刷新</button>
+        </header>
+        <div class="kpis k4" id="bhStats"></div>
+        <div class="pad">
+          <div class="uschart">
+            <div class="uschart-hd"><span class="lb">余额水位</span><span class="note">余额刷新时采样，约 30 分钟一点；国内与国际积分不同源，分开展示</span></div>
+            <div id="bhChart" class="uschart-body"></div>
+          </div>
+          <div class="uschart" style="margin-top:12px">
+            <div class="uschart-hd"><span class="lb">每日变化</span><span class="note">上方到账、下方消耗；按相邻采样差值估算，为下界；淡色 = 当日采样不完整</span></div>
+            <div id="bhDaily" class="uschart-body"></div>
+          </div>
+        </div>
+      </div>
+      <div class="box">
+        <header><h3>按账号</h3><span class="grow"></span><span class="note">消耗 / 到账：上行今日、下行本月（下界估计）</span></header>
+        <div class="tbl-wrap">
+          <table class="acc zebra">
+            <thead><tr><th>账号</th><th class="num">当前</th><th class="num">最低</th><th class="num">最高</th><th class="num">净变化</th><th class="num">今日</th><th class="num">昨日</th><th class="num">消耗</th><th class="num">到账</th><th class="num">采样点</th></tr></thead>
+            <tbody id="bhBody"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <!-- 用量 -->

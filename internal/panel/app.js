@@ -360,7 +360,7 @@ let lastPackagesAt = 0;
 let expFetching = false;                       // 到期卡片在途标记（防重复打上游）
 const EXP_FRESH_MS = 2 * 60 * 1000;            // 缓存新鲜窗口：2 分钟内复用
 
-const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
+const TITLES = { accounts: '账号池', usage: '用量', packages: '积分构成', balhist: '余额趋势', taskscenter: '任务中心', models: '模型与档位', config: '配置', logs: '运行日志' };
 function go(v) {
   view = v;
   document.querySelectorAll('.view').forEach(s => s.hidden = s.id !== 'view-' + v);
@@ -371,6 +371,7 @@ function go(v) {
   if (v === 'logs') loadLogs(); // 本地已有窗口时继续增量，不清游标
   if (v === 'usage') loadUsage();
   if (v === 'packages') loadPackages();
+  if (v === 'balhist') loadBalance();
   // 到期提醒卡片：默认可见，进页面即用 overview 快照渲染（零上游请求，随首页统计
   // 每轮刷新）。不再「打开账号池就打上游」——逐账号实时查在账号多时会卡死面板。
   // 完整逐包明细由卡片上的「检查」按钮显式触发（loadPackages/loadExpiry）。
@@ -3187,3 +3188,207 @@ if ($('btnExp')) $('btnExp').onclick = () => loadExpiry(true);
 
 // 「刷新」始终实时查（显式 force，不依赖事件对象真值）
 if ($('btnPk')) $('btnPk').onclick = () => loadPackages(true);
+
+/* ── 余额趋势 ─────────────────────────────────────────────────────── */
+/* 数据来自 balance_history：余额刷新时顺手采样（约 30 分钟一点），30 天原始点，
+   更早折叠为日粒度。cn 与 global 积分不同源、不可相加，一律按域分开展示。
+   消耗/到账由相邻采样差值累加：同一采样窗口内的消耗与到账会互相抵消，是下界估计。 */
+const BH_REALMS = [{ key: 'cn', label: '国内' }, { key: 'global', label: '国际' }];
+let bhRealm = null;
+function bhRealmOf(s) { const r = (s && s.realm) || ''; return r === 'cn' || r === 'global' ? r : 'other'; }
+function bhRealmLabel(k) { const r = BH_REALMS.find(x => x.key === k); return r ? r.label : '其他'; }
+function bhPickRealm(all) {
+  const have = {};
+  all.forEach(s => { have[bhRealmOf(s)] = true; });
+  let saved = null;
+  try { saved = localStorage.getItem('wb2api.bh.realm'); } catch (e) { /* 忽略 */ }
+  if (saved && have[saved]) return saved;
+  const first = BH_REALMS.find(r => have[r.key]);
+  return first ? first.key : (have.other ? 'other' : 'cn');
+}
+function bhNum(v) {
+  const n = Number(v || 0);
+  return Number.isFinite(n) ? Math.round(n).toLocaleString('en-US') : '—';
+}
+function bhSigned(v, full) {
+  if (v === null || v === undefined) return '<span class="bh-na">—</span>';
+  const n = Number(v);
+  const cls = n > 0 ? 'bh-up' : n < 0 ? 'bh-down' : 'bh-flat';
+  return '<span class="' + cls + (full === false ? ' bh-dim" title="该日采样不完整（当天未结束或中途启用）' : '') + '">' +
+    (n > 0 ? '+' : '') + bhNum(n) + '</span>';
+}
+// bhDayKey 北京时间日期键（与后端日界一致）。
+function bhDayKey(ms) {
+  const d = new Date(ms + 8 * 3600 * 1000);
+  return d.toISOString().slice(0, 10);
+}
+function bhDayOf(s, key) { return (s.daily || []).find(x => x.day === key) || null; }
+// bhMonthFlow 本月消耗/到账合计；covered=false 表示窗口没覆盖到 1 号（只是部分月份之和）。
+function bhMonthFlow(s, nowMs) {
+  const ym = bhDayKey(nowMs).slice(0, 7);
+  let consumed = 0, gained = 0, n = 0, first = null;
+  (s.daily || []).forEach(x => {
+    if (!x || String(x.day).slice(0, 7) !== ym) return;
+    consumed += Number(x.consumed || 0); gained += Number(x.gained || 0); n++;
+    if (!first || x.day < first) first = x.day;
+  });
+  return { consumed, gained, days: n, covered: !!first && first <= ym + '-01', first };
+}
+function bhFlowCell(today, month) {
+  const t = today ? '<span' + (today.full ? '' : ' class="bh-dim" title="该日采样不完整，下界估计"') + '>' + bhNum(today.v) + '</span>' : '<span class="bh-na">—</span>';
+  const m = !month || !month.days ? '<span class="bh-na">—</span>'
+    : '<span' + (month.covered ? '' : ' class="bh-dim" title="窗口只覆盖本月 ' + esc(String(month.first || '').slice(5)) + ' 起"') + '>' + bhNum(month.v) + '</span>';
+  return '<td class="num bh-flow" title="上行 今日 / 下行 本月">' + t + '<br><small>' + m + '</small></td>';
+}
+// bhAcctState 账号当前池状态（来自 overview 快照）；没有记录返回 null。
+function bhAcctState(uid) {
+  const list = (overviewData && overviewData.accounts) || [];
+  return list.find(a => a && a.uid === uid) || null;
+}
+
+// renderBalanceChart 多账号余额折线：x 轴按真实时间比例（什么时候到账/掉分正是要看的）。
+function renderBalanceChart(rows, colors) {
+  const host = $('bhChart');
+  const series = rows.filter(s => (s.points || []).length);
+  if (!series.length) {
+    host.innerHTML = '<div class="us-empty">暂无余额采样。余额刷新时自动记录（约 30 分钟一点）。</div>';
+    return;
+  }
+  const W = 1200, H = 220, PL = 66, PR = 14, PT = 14, PB = 28;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  let t0 = Infinity, t1 = -Infinity, lo = Infinity, hi = -Infinity;
+  series.forEach(s => s.points.forEach(p => {
+    t0 = Math.min(t0, p.t); t1 = Math.max(t1, p.t);
+    lo = Math.min(lo, p.c); hi = Math.max(hi, p.c);
+  }));
+  if (hi === lo) { hi += 1; lo = Math.max(0, lo - 1); }
+  const pad = (hi - lo) * 0.06;
+  lo = Math.max(0, lo - pad); hi += pad;
+  const span = Math.max(1, t1 - t0);
+  const xOf = t => PL + (t - t0) / span * iw;
+  const yOf = v => PT + ih - ih * ((v - lo) / (hi - lo));
+  let out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" preserveAspectRatio="xMidYMid meet">';
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * i / 4, y = yOf(v);
+    out += '<line class="gl" x1="' + PL + '" y1="' + y.toFixed(1) + '" x2="' + (W - PR) + '" y2="' + y.toFixed(1) + '"/>' +
+      '<text class="tk" x="' + (PL - 6) + '" y="' + (y + 3.5).toFixed(1) + '" text-anchor="end">' + bhNum(v) + '</text>';
+  }
+  for (let i = 0; i <= 4; i++) {
+    const t = t0 + span * i / 4, x = xOf(t);
+    const d = new Date(t * 1000 + 8 * 3600 * 1000).toISOString();
+    const lb = span > 2 * 86400 ? d.slice(5, 10) : d.slice(11, 16);
+    out += '<text class="tk" x="' + x.toFixed(1) + '" y="' + (H - 8) + '" text-anchor="' + (i === 0 ? 'start' : i === 4 ? 'end' : 'middle') + '">' + lb + '</text>';
+  }
+  series.forEach(s => {
+    const c = colors.get(s.uid) || 'var(--accent)';
+    const pts = s.points.map(p => xOf(p.t).toFixed(1) + ',' + yOf(p.c).toFixed(1));
+    out += '<g><title>' + esc(s.name || s.uid.slice(0, 8)) + ' 当前 ' + bhNum(s.current) + '</title>';
+    if (pts.length === 1) {
+      out += '<circle cx="' + pts[0].split(',')[0] + '" cy="' + pts[0].split(',')[1] + '" r="2.5" style="fill:' + c + '"/>';
+    } else {
+      out += '<polyline points="' + pts.join(' ') + '" style="fill:none;stroke:' + c + ';stroke-width:' + (series.length > 6 ? 1.5 : 2) + ';stroke-linejoin:round"/>';
+    }
+    out += '</g>';
+  });
+  host.innerHTML = out + '</svg>';
+}
+
+// renderBalanceDaily 本域每日净变化（各账号相加，同域可加）：上行到账、下行消耗。
+function renderBalanceDaily(rows) {
+  const host = $('bhDaily');
+  const by = new Map();
+  rows.forEach(s => (s.daily || []).forEach(d => {
+    const o = by.get(d.day) || { day: d.day, change: 0, consumed: 0, gained: 0, full: true };
+    o.change += Number(d.change || 0); o.consumed += Number(d.consumed || 0); o.gained += Number(d.gained || 0);
+    o.full = o.full && !!d.full;
+    by.set(d.day, o);
+  }));
+  const days = Array.from(by.values()).sort((a, b) => a.day < b.day ? -1 : 1).slice(-30);
+  if (!days.length) { host.innerHTML = '<div class="us-empty">暂无按日数据。</div>'; return; }
+  const W = 1200, H = 180, PL = 66, PR = 14, PT = 12, PB = 26;
+  const iw = W - PL - PR, ih = H - PT - PB, mid = PT + ih / 2;
+  const max = Math.max(1, ...days.map(d => Math.max(d.consumed, d.gained)));
+  const slot = iw / days.length, bw = Math.max(3, Math.min(26, slot * 0.6));
+  let out = '<svg viewBox="0 0 ' + W + ' ' + H + '" role="img" preserveAspectRatio="xMidYMid meet">' +
+    '<line class="ax" x1="' + PL + '" y1="' + mid + '" x2="' + (W - PR) + '" y2="' + mid + '"/>' +
+    '<text class="tk" x="' + (PL - 6) + '" y="' + (PT + 8) + '" text-anchor="end">+' + bhNum(max) + '</text>' +
+    '<text class="tk" x="' + (PL - 6) + '" y="' + (PT + ih) + '" text-anchor="end">-' + bhNum(max) + '</text>';
+  days.forEach((d, i) => {
+    const x = PL + slot * i + (slot - bw) / 2;
+    const hg = (ih / 2) * d.gained / max, hc = (ih / 2) * d.consumed / max;
+    const op = d.full ? 1 : 0.45;
+    out += '<g><title>' + d.day + (d.full ? '' : '（采样不完整）') + '  净变化 ' + (d.change > 0 ? '+' : '') + bhNum(d.change) +
+      ' / 到账 ≥' + bhNum(d.gained) + ' / 消耗 ≥' + bhNum(d.consumed) + '</title>' +
+      '<rect x="' + x.toFixed(1) + '" y="' + (mid - hg).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + hg.toFixed(1) + '" style="fill:var(--ok);opacity:' + op + '"/>' +
+      '<rect x="' + x.toFixed(1) + '" y="' + mid.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + hc.toFixed(1) + '" style="fill:var(--bad);opacity:' + op + '"/></g>';
+    if (days.length <= 16 || i % Math.ceil(days.length / 16) === 0) {
+      out += '<text class="tk" x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 8) + '" text-anchor="middle">' + d.day.slice(5) + '</text>';
+    }
+  });
+  host.innerHTML = out + '</svg>';
+}
+
+function bhAccountRow(s, color, nowMs) {
+  const today = bhDayOf(s, bhDayKey(nowMs)), yday = bhDayOf(s, bhDayKey(nowMs - 86400000));
+  const mo = bhMonthFlow(s, nowMs);
+  const nm = s.name || s.uid.slice(0, 8);
+  return '<tr><td><i class="bh-dot" style="background:' + color + '"></i>' + esc(nm) + bhAcctMark(s.uid) + '</td>' +
+    '<td class="num">' + bhNum(s.current) + '</td>' +
+    '<td class="num">' + bhNum(s.min) + '</td>' +
+    '<td class="num">' + bhNum(s.max) + '</td>' +
+    '<td class="num">' + bhSigned(s.change) + '</td>' +
+    '<td class="num">' + (today ? bhSigned(today.change, today.full) : bhSigned(null)) + '</td>' +
+    '<td class="num">' + (yday ? bhSigned(yday.change, yday.full) : bhSigned(null)) + '</td>' +
+    bhFlowCell(today && { v: today.consumed, full: today.full }, { v: mo.consumed, days: mo.days, covered: mo.covered, first: mo.first }) +
+    bhFlowCell(today && { v: today.gained, full: today.full }, { v: mo.gained, days: mo.days, covered: mo.covered, first: mo.first }) +
+    '<td class="num">' + (s.points || []).length + '</td></tr>';
+}
+// bhAcctMark 账号已禁用/暂停时在名字后标注：曲线停更的原因要看得见。
+function bhAcctMark(uid) {
+  const a = bhAcctState(uid);
+  if (!a) return '';
+  if (a.disabled) return ' <span class="tag bad">已禁用</span>';
+  if (a.paused) return ' <span class="tag warn">暂停选号</span>';
+  return '';
+}
+
+async function loadBalance() {
+  const days = Number(($('bhWindow') || {}).value || 30);
+  try {
+    const d = await api('balance_history?days=' + days);
+    const all = d.series || [];
+    if (bhRealm === null || !all.some(s => bhRealmOf(s) === bhRealm)) bhRealm = bhPickRealm(all);
+    const count = {};
+    all.forEach(s => { const r = bhRealmOf(s); count[r] = (count[r] || 0) + 1; });
+    const tabs = BH_REALMS.filter(r => count[r.key]).concat(count.other ? [{ key: 'other', label: '其他' }] : []);
+    $('bhRealmTabs').innerHTML = tabs.map(r => '<button data-realm="' + r.key + '"' + (r.key === bhRealm ? ' class="on"' : '') + '>' +
+      esc(r.label) + ' · ' + count[r.key] + '</button>').join('');
+    const rows = all.filter(s => bhRealmOf(s) === bhRealm);
+    const colors = pkAccountColorMap(rows);
+    const nowMs = d.now ? Date.parse(d.now) : Date.now();
+    renderBalanceChart(rows, colors);
+    renderBalanceDaily(rows);
+    let total = 0, delta = 0, pts = 0;
+    rows.forEach(s => { total += Number(s.current || 0); delta += Number(s.change || 0); pts += (s.points || []).length; });
+    $('bhStats').innerHTML =
+      usKpi(String(rows.length), '账号（' + bhRealmLabel(bhRealm) + '）', 'c-accent') +
+      usKpi(bhNum(total), '当前合计', 'c-accent') +
+      usKpi((delta > 0 ? '+' : '') + bhNum(delta), '窗口净变化', delta > 0 ? 'c-ok' : delta < 0 ? 'c-bad' : 'c-mute') +
+      usKpi(bhNum(pts), '采样点', 'c-soft');
+    $('bhBody').innerHTML = rows.length
+      ? rows.map(s => bhAccountRow(s, colors.get(String(s.uid)) || 'var(--accent)', nowMs)).join('')
+      : '<tr><td colspan="10"><div class="empty">该域暂无采样</div></td></tr>';
+    $('bhNote').textContent = days + ' 天窗口 · 更新于 ' + new Date(nowMs).toLocaleTimeString('zh-CN', { hour12: false });
+  } catch (e) {
+    $('bhChart').innerHTML = '<div class="us-empty">读取余额趋势失败：' + esc(e.message) + '</div>';
+  }
+}
+if ($('bhRealmTabs')) $('bhRealmTabs').addEventListener('click', ev => {
+  const b = ev.target.closest('button[data-realm]');
+  if (!b) return;
+  bhRealm = b.dataset.realm;
+  try { localStorage.setItem('wb2api.bh.realm', bhRealm); } catch (e) { /* 忽略 */ }
+  loadBalance();
+});
+if ($('bhWindow')) $('bhWindow').onchange = () => loadBalance();
+if ($('btnBh')) $('btnBh').onclick = () => loadBalance();
