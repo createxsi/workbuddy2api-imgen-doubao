@@ -1177,6 +1177,15 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <input type="checkbox" name="sanitize_blacklist_fingerprints"></div>
             <div class="switch"><span class="lb">会话粘性路由</span>
               <input type="checkbox" name="session_sticky_enabled"></div>
+            <div class="hr"></div>
+            <div class="grid2">
+              <label class="fld"><span class="lb">模型黑名单</span>
+                <input name="models_hidden" placeholder="deepseek-pro, cn:legacy-model">
+                <span class="hint">逗号分隔；裸名两域都藏，cn: / global: 只藏该域；对话与出图的列表不列、点名调用拒绝；保存即热生效</span></label>
+              <label class="fld"><span class="lb">模型映射</span>
+                <input name="models_aliases" placeholder="claude-sonnet-4=hy3, gpt-5=global:hy3">
+                <span class="hint">逗号分隔的「客户端名=真实模型名」；真实名不带前缀时沿用请求的域；响应回显客户端原发名；目标仍受黑名单约束；保存即热生效</span></label>
+            </div>
             <div class="hint" style="margin-top:10px">Upstash Redis 镜像、凭证目录与状态文件路径需手工编辑配置文件（判为重启项）。</div>
           </div>
         </div>

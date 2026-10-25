@@ -21,6 +21,39 @@ type Snapshot struct {
 	SanitizeFingerprints bool          // 出站请求体指纹脱敏
 	RecordClientInfo     bool          // 请求日志是否记录调用来源（客户端 IP / UA）
 	HiddenModels         map[string]struct{} // 精确隐藏的模型 id（已归一化为 "cn:x"/"global:x" 全量形式）；nil = 不隐藏
+	ModelAliases         map[string]string   // 客户端名 → 真实模型名（键 "cn:x"/"global:x" 小写）；nil = 不映射
+}
+
+// NormalizeModelAliases 把 aliases 条目（"客户端名=真实模型名"）归一化为查找表。
+//   - 按第一个 "=" 拆分，键值 Trim，键小写；
+//   - 键带 cn:/global: 前缀只在该域生效，裸名键两域都登记（与 NormalizeHiddenModels 同口径）；
+//   - 值原样保留，可带前缀显式指定域；
+//   - 无 "="、空键/空值、自我映射丢弃；重复键以后写为准。
+func NormalizeModelAliases(in []string) map[string]string {
+	out := make(map[string]string, len(in)*2)
+	for _, item := range in {
+		k, v, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" || strings.EqualFold(k, v) {
+			continue
+		}
+		if prefix, bare, cut := strings.Cut(k, ":"); cut && (prefix == "cn" || prefix == "global") {
+			if bare != "" {
+				out[k] = v
+			}
+			continue
+		}
+		out["cn:"+k] = v
+		out["global:"+k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Holder 原子持有当前快照。

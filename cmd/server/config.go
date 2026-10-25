@@ -189,6 +189,9 @@ type Config struct {
 		// 生效点：GET /v1/models 列表过滤 + POST /v1/chat/completions 点名拒绝。
 		// 面板保存后经 livecfg 热生效，无需重启。
 		Hidden []string `json:"hidden"`
+		// Aliases 模型映射："客户端名=真实模型名"。裸名键两域生效，cn:/global: 前缀键只在该域生效；
+		// 映射在黑名单检查之前完成（目标仍受 Hidden 约束）。面板保存后热生效。
+		Aliases []string `json:"aliases"`
 	} `json:"models"`
 
 	Prompt struct {
