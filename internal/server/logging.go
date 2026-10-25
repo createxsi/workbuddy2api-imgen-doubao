@@ -116,6 +116,10 @@ type chatStatsReader struct {
 	cacheHit     int
 	cacheMiss    int
 	hasCacheMiss bool
+	// sawToolCalls/finishReason：本流是否出现过非空 delta.tool_calls、最后一个非空
+	// finish_reason，用于识别「声明了 tools 却 stop 且零 tool_calls」的回合。
+	sawToolCalls bool
+	finishReason string
 	pend         []byte // 已读未返回的行缓存
 }
 
@@ -129,6 +133,12 @@ func (s *chatStatsReader) TTFB() time.Duration { return s.ttfb }
 
 // Tokens 返回末帧 usage.completion_tokens 与是否缺失；无 usage 时 ok=false。
 func (s *chatStatsReader) Tokens() (int, bool) { return s.completionTokens, s.hasCompletionTokens }
+
+// SawToolCalls 报告本流是否出现过非空 delta.tool_calls。
+func (s *chatStatsReader) SawToolCalls() bool { return s.sawToolCalls }
+
+// FinishReason 本流最后一个非空 finish_reason；上游没给过则为空串。
+func (s *chatStatsReader) FinishReason() string { return s.finishReason }
 
 // Credit 返回末帧 usage.credit（本次真实扣费积分）与是否缺失。
 func (s *chatStatsReader) Credit() (float64, bool) { return s.credit, s.hasCredit }
@@ -164,6 +174,13 @@ func (s *chatStatsReader) parseSSELine(line string) {
 	}
 	var chunk struct {
 		Error json.RawMessage `json:"error"`
+		// 只取 delta.tool_calls 与 finish_reason；encoding/json 跳过未声明键，不为正文分配内存。
+		Choices []struct {
+			Delta struct {
+				ToolCalls []json.RawMessage `json:"tool_calls"`
+			} `json:"delta"`
+			FinishReason string `json:"finish_reason"`
+		} `json:"choices"`
 		Usage *struct {
 			PromptTokens         *int     `json:"prompt_tokens"`
 			CompletionTokens     *int     `json:"completion_tokens"`
@@ -173,14 +190,23 @@ func (s *chatStatsReader) parseSSELine(line string) {
 			PromptCacheMissTok   *int     `json:"prompt_cache_miss_tokens"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal([]byte(payload), &chunk) != nil || chunk.Usage == nil {
-		if json.Unmarshal([]byte(payload), &chunk) == nil && len(chunk.Error) > 0 {
-			s.errorFrame = true
-		}
+	if json.Unmarshal([]byte(payload), &chunk) != nil {
 		return
 	}
 	if len(chunk.Error) > 0 {
 		s.errorFrame = true
+	}
+	for _, c := range chunk.Choices {
+		// 上游每帧都带 "tool_calls":[]，判据是数组长度而不是字段存在。
+		if len(c.Delta.ToolCalls) > 0 {
+			s.sawToolCalls = true
+		}
+		if c.FinishReason != "" {
+			s.finishReason = c.FinishReason
+		}
+	}
+	if chunk.Usage == nil {
+		return
 	}
 	if chunk.Usage.PromptTokens != nil {
 		s.hasPromptTokens = true
@@ -630,4 +656,10 @@ func (c *cacheMissSignal) noteCacheTokens(model string, prompt, hit, miss int64)
 	}
 	c.last[model] = now
 	log.Printf("WARN: [server] cache miss: model=%s 本次大前缀未命中（prompt=%d miss=%d，此前观测到过命中）；上游前缀缓存重算，费用会显著升高", model, prompt, miss)
+}
+
+// silentToolStop 判定「声明了 tools、零 tool_calls、finish_reason=stop」的回合。
+// repaired 是从正文标记还原出的调用数：stats 读的是还原前的上游原流，还原出调用就不算。
+func silentToolStop(declared int, sawToolCalls bool, repaired int, finish string) bool {
+	return declared > 0 && !sawToolCalls && repaired == 0 && finish == "stop"
 }

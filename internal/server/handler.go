@@ -1158,6 +1158,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				log.Printf("WARN: [server] stream acct=%s model=%s: saw %d native tool call block(s) but repaired none (tool names known=%d)",
 					logfmt.Label(acct.UID, acct.Nickname), bareModel, m, len(declaredTools))
 			}
+			// 声明了 tools 却 finish_reason=stop 且全流零 tool_calls（含正文标记还原出的）：
+			// 客户端会当回合已完成、工具一次没跑。模型直接作答是合法收尾，故只记 INFO
+			// 便于排查，不改流、不罚号、不进 WARN/ERR 统计。
+			if silentToolStop(len(declaredTools), stats.SawToolCalls(), repair.Converted(), stats.FinishReason()) {
+				log.Printf("INFO: [server] stream acct=%s model=%s: finish_reason=stop with zero tool_calls despite %d declared tool(s) (本轮无工具调用，正常收尾)",
+					logfmt.Label(acct.UID, acct.Nickname), bareModel, len(declaredTools))
+			}
 			st.ttfb = stats.TTFB()
 			// usage 缺失时保留 chatStat.toks 的 -1 哨兵（观测缺失 → 显示 "-"），
 			// 不写入零值——否则「没观测到 usage」被伪造成「测得 0 token」，
