@@ -68,6 +68,8 @@ type Config struct {
 	// ModelsHidden 模型黑名单原始条目（config models.hidden；Live 为 nil 的
 	// 裸用/测试路径经 loadLive() 归一化后使用）。
 	ModelsHidden []string
+	// ModelsAliases 模型映射原始条目（config models.aliases；Live 为 nil 时用）。
+	ModelsAliases []string
 
 	// Usage 逐请求用量记录器（可选；nil = 不记录）。
 	// 在 recordAttempt 这一唯一汇聚点调用，因此流式/非流式、成功/失败都会计入，
@@ -93,7 +95,27 @@ func (h *Handler) loadLive() livecfg.Snapshot {
 		SoftCooldown:     h.cfg.SoftCooldown,
 		RecordClientInfo: h.cfg.RecordClientInfo,
 		HiddenModels:     livecfg.NormalizeHiddenModels(h.cfg.ModelsHidden),
+		ModelAliases:     livecfg.NormalizeModelAliases(h.cfg.ModelsAliases),
 	}
+}
+
+// hiddenModel (realm, 裸名) 是否被 models.hidden 隐藏。对话列表、出图列表、chat 与出图入口
+// 共用本判据，漏一处黑名单就可被绕过。
+func (h *Handler) hiddenModel(realm, bare string) bool {
+	if bare == "" {
+		return false
+	}
+	_, hide := h.loadLive().HiddenModels[realm+":"+bare]
+	return hide
+}
+
+// modelAlias 查 models.aliases：按 (realm, 小写裸名) 命中返回目标名（原样，可带域前缀）。
+func (h *Handler) modelAlias(realm, bare string) (string, bool) {
+	if bare == "" {
+		return "", false
+	}
+	t, ok := h.loadLive().ModelAliases[realm+":"+strings.ToLower(bare)]
+	return t, ok && t != ""
 }
 
 // softCooldown 返回当前生效的软冷却基数（热改优先，<=0 回退默认）。
@@ -153,6 +175,8 @@ func NewHandler(cfg Config) *Handler {
 	h.mux.HandleFunc("POST /v1/search", h.withAuth(h.webSearch))
 	h.mux.HandleFunc("POST /v1/webfetch", h.withAuth(h.webFetch))
 	h.mux.HandleFunc("POST /v1/fetch", h.withAuth(h.deepSeekFetch))
+	// 官方客户端的「模型忙」预检：本地按池台账算，不打上游（见 busy.go）。
+	h.mux.HandleFunc("POST /v2/chat/busy", h.withAuth(h.chatBusy))
 	// 生图（OpenAI Images API 兼容）：转发到账号 realm 对应的上游
 	// /v2/images/generations（global = www.workbuddy.ai，即桌面版 WorkBuddyAI
 	// ImageGen 的同域端点）。选号/轮转/错误处置与 chat 同链路。
@@ -397,10 +421,8 @@ func applyModelInfoFields(entry map[string]any, mi upstream.ModelInfo) map[strin
 // 纯动态：动态拉取失败/无号 → 该域空列表，无静态兜底。
 func (h *Handler) modelList() []map[string]any {
 	out := make([]map[string]any, 0)
-	// models.hidden 黑名单：快照外提，避免逐条目重复 Load。
-	hidden := h.loadLive().HiddenModels
 	for _, mi := range h.fetchDynamicModels() {
-		if _, ok := hidden["cn:"+mi.ID]; ok {
+		if h.hiddenModel("cn", mi.ID) {
 			continue
 		}
 		entry := map[string]any{
@@ -446,7 +468,7 @@ func (h *Handler) modelList() []map[string]any {
 		}
 		globalEfforts, globalDefaults := h.cfg.Upstream.GlobalEffortSnapshot()
 		for _, id := range globalIDs {
-			if _, ok := hidden["global:"+id]; ok {
+			if h.hiddenModel("global", id) {
 				continue
 			}
 			entry := map[string]any{
@@ -589,6 +611,19 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// bareModel 用于选号/粘性/出站 body 重写（前缀是网关侧路由协议，上游只认裸名）。
 	// 裸名 → ("cn", 原串)，CN 现状零回归。
 	realm, bareModel := resolveModel(peek.Model)
+
+	// models.aliases：客户端名命中 → 选号/粘性/出站/账本一律用目标名，realm 按目标重解析
+	// （目标未带前缀时沿用请求的域）。放在黑名单检查之前：别名不能绕过 models.hidden。
+	// modelEcho 非空 = 走了映射，响应里的 model 回写客户端原发名。
+	modelEcho, routeModel := "", peek.Model
+	if target, ok := h.modelAlias(realm, bareModel); ok {
+		if !hasRealmPrefix(target) {
+			target = realm + ":" + target
+		}
+		realm, bareModel = resolveModel(target)
+		modelEcho, routeModel = peek.Model, target
+		log.Printf("INFO: [server] model alias applied: %s -> %s", peek.Model, target)
+	}
 	modelRate := ""
 	if h.cfg.Upstream != nil {
 		modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
@@ -603,10 +638,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		st.clientIP, st.userAgent = tr.clientIP, tr.userAgent
 	}
 	defer st.done()
+	if modelEcho != "" {
+		st.model = routeModel // 流水行与账本口径一致；别名 INFO 行已记 客户端名 -> 真实名
+	}
 
 	// models.hidden 黑名单：点名调用直接拒绝，不打上游、不占选号。
 	// 与 /v1/models 的列表过滤对称（只藏列表不够，知道名字仍可硬调）。
-	if _, hide := h.loadLive().HiddenModels[realm+":"+bareModel]; hide {
+	if h.hiddenModel(realm, bareModel) {
 		writeOpenAIErrorHint(w, http.StatusBadRequest, "model_unavailable",
 			"model is hidden by gateway configuration, try another model", "")
 		st.status = http.StatusBadRequest
@@ -630,7 +668,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.Session != nil && sessKey != "" {
 		// 按模型解析：绑定号在**当前模型**被 6004 限额时视为不可用 → 重新分配，
 		// 而不是钉在限额号上反复失败（"限额后换不动号"的正解）。
-		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, peek.Model); ok {
+		if uid, ok := h.cfg.Session.ResolveForModel(sessKey, routeModel); ok {
 			stickyUID = uid
 		}
 	}
@@ -693,7 +731,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		delta.Model = bareModel
 		if delta.Model == "" {
-			delta.Model = peek.Model
+			delta.Model = routeModel
 		}
 		latency := time.Since(started)
 		latencyMs := latency.Milliseconds()
@@ -1094,7 +1132,7 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			sErr := upstream.StreamHint(w, stats, upstream.FrameHintFunc(func() upstream.HintContext {
 				return h.hintContext(bareModel, reqHasImage)
 			}), upstream.WithErrorFrameObserver(func(payload string) { errFrame = payload }),
-				upstream.WithMarkupRepair(repair))
+				upstream.WithMarkupRepair(repair), upstream.WithModelEcho(modelEcho))
 			switch {
 			case upstream.IsEmptyStreamError(sErr):
 				// 上游 200 但空流（0 有效帧）：StreamHint 已写 error 帧 + [DONE]
@@ -1215,6 +1253,9 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		recordAttempt(acct.UID, usageDeltaFromResponse(resp), credit, hasCredit, attemptStarted, 0)
 		if st.hasCache {
 			cacheMissWarn.noteCacheTokens(bareModel, st.promptTokens, st.cacheHit, st.cacheMiss)
+		}
+		if modelEcho != "" {
+			resp["model"] = modelEcho // 与流式 WithModelEcho 同语义
 		}
 		writeJSON(w, http.StatusOK, resp)
 		st.status = http.StatusOK
