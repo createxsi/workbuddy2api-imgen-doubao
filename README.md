@@ -363,7 +363,19 @@ curl -s http://localhost:7863/v1/chat/completions \
   -H "Authorization: Bearer your-api-key" \
   -H "Content-Type: application/json" \
   -d '{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hi"}],"stream":false}'
+
+# anthropic_messages（Claude Code / Anthropic SDK 原生协议，网关内直接转 chat 链路）
+# x-api-key 与 Authorization: Bearer 均可；api_key 为空时不鉴权
+curl -s http://localhost:7863/v1/messages \
+  -H "x-api-key: your-api-key" \
+  -H "anthropic-version: 2023-06-01" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"deepseek-v4-flash","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
 ```
+
+Claude Code 接入：`ANTHROPIC_BASE_URL=http://localhost:7863`（指到网关根，SDK 自己拼 `/v1/messages`），`ANTHROPIC_AUTH_TOKEN`（或 `ANTHROPIC_API_KEY`）填网关 `api_key`；`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` 填网关可用的模型名（如 `deepseek-v4-flash`、`global:hy3`），Claude 自带的模型名不会被自动识别。
+
+`POST /v1/messages/count_tokens` **未实现**（404）：Claude Code 会退回本地估算上下文，不影响使用，不是网关故障。
 
 ## 配置说明
 
