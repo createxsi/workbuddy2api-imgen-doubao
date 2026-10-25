@@ -962,6 +962,12 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
                 <input type="checkbox" name="balance_refresh_enabled"></div>
               <label class="fld"><span class="lb">刷新间隔（分钟）</span>
                 <input name="balance_refresh_minutes" type="number" min="1" placeholder="5"></label>
+              <label class="fld"><span class="lb">刷新抖动（‰）</span>
+                <input name="balance_refresh_jitter_permill" type="number" min="0" max="500" placeholder="0">
+                <span class="hint">0 = 关闭。每轮间隔在 ±(值/1000)×间隔内随机偏移，账号在同量级窗口内错峰起跑，不再整点齐射；上限 500。手动刷新不受影响</span></label>
+              <label class="fld"><span class="lb">夜猫子参与上限（个）</span>
+                <input name="night_account_cap" type="number" min="0" placeholder="0">
+                <span class="hint">0 = 不限。&gt;0 时夜猫子只让积分最高的前 N 个账号参加，其余账号夜里静默；白天任务不受影响</span></label>
             </div>
             <div class="hr"></div>
             <div class="grid2">

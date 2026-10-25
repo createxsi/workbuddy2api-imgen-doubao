@@ -112,6 +112,14 @@ type Config struct {
 		// 解冻语义同签到（余额 > 0 的冷却账号自动解冻），但不做签到不刷 token。
 		BalanceRefreshEnabled bool `json:"balance_refresh_enabled"` // 缺省 true；false = 关闭
 		BalanceRefreshMinutes int  `json:"balance_refresh_minutes"` // 缺省 5；<=0 回落 5
+		// BalanceRefreshJitterPermill 余额刷新周期抖动（千分比，0–500，缺省 0 = 关闭）：
+		// >0 时每轮间隔在 ±(值/1000)×间隔内随机偏移，且各账号在 (值/1000)×间隔窗口内
+		// 错峰起跑，不再整点齐射。面板手动刷新不受影响。例：5 分钟 + 200 → 间隔 4–6 分钟。
+		BalanceRefreshJitterPermill int `json:"balance_refresh_jitter_permill"`
+
+		// NightAccountCap 夜猫子参与上限：>0 时只让积分最高的前 N 个合格账号参加，
+		// 0 = 不限（缺省，全池参加）。其余白天任务不受影响。
+		NightAccountCap int `json:"night_account_cap"`
 	} `json:"schedule"`
 
 	Global struct {
@@ -471,6 +479,16 @@ func applyEnv(c *Config) {
 			c.Pool.PreferExpiring = b
 		}
 	}
+	if v := os.Getenv("WB2A_SCHEDULE_BALANCE_REFRESH_JITTER_PERMILL"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Schedule.BalanceRefreshJitterPermill = n
+		}
+	}
+	if v := os.Getenv("WB2A_SCHEDULE_NIGHT_ACCOUNT_CAP"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			c.Schedule.NightAccountCap = n
+		}
+	}
 }
 
 func (c *Config) normalize() error {
@@ -612,6 +630,13 @@ func (c *Config) normalize() error {
 			c.Schedule.BalanceRefreshMinutes = 5
 		}
 		c.BalanceRefreshInterval = time.Duration(c.Schedule.BalanceRefreshMinutes) * time.Minute
+	}
+	// 非法值直接报错（不静默钳位），配置错误在启动/保存时暴露。
+	if v := c.Schedule.BalanceRefreshJitterPermill; v < 0 || v > 500 {
+		return fmt.Errorf("schedule.balance_refresh_jitter_permill: %d 非法（0 = 关闭，上限 500）", v)
+	}
+	if v := c.Schedule.NightAccountCap; v < 0 {
+		return fmt.Errorf("schedule.night_account_cap: %d 非法（0 = 不限，>0 = 积分前 N 个）", v)
 	}
 	if err := c.validateScheduleHours(); err != nil {
 		return err

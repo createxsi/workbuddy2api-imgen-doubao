@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/logfmt"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
@@ -31,22 +32,26 @@ func (s *Scheduler) runBlackcat(ctx context.Context) {
 		return
 	}
 	list, wait := s.accountsFor(ctx)
+	// 先筛出合格账号，再按夜间参与上限（schedule.night_account_cap）收窄为积分最高的
+	// 前 N 个：夜猫子整任务都是真实模型对话，深夜全池同出口齐做最容易被识别；
+	// 上限 0 = 不限（旧行为）。在合格集合上取 Top-N，避免名额被注定跳过的号占掉。
+	eligible := make([]pool.Status, 0, len(list))
 	for _, st := range list {
-		// 暂停选号（paused）账号跳过：夜猫子是全任务体系中唯一「整任务都是
-		// 真实模型对话」的（RunNightChats 逐条 ChatStream 发 glm-5.2 短对话），
-		// 与「让位防风控」正面冲突。旅行/成长任务都是纯上报或领奖 RPC，照常跑。
-		if st.Disabled || st.Paused {
+		if s.blackcatEligible(st) {
+			eligible = append(eligible, st)
+		}
+	}
+	chosen := make(map[string]bool, len(eligible))
+	for _, st := range capByCredits(eligible, s.NightAccountCap()) {
+		chosen[st.UID] = true
+	}
+	for _, st := range eligible {
+		if !chosen[st.UID] {
 			continue
 		}
 		a := s.cfg.Pool.AuthByUID(st.UID)
-		if a == nil || a.AccessTokenValue() == "" {
+		if a == nil {
 			continue
-		}
-		if a.IsGlobal() {
-			continue // D4 门控：global 无 CN 任务体系，不发起任何上游调用
-		}
-		if a.IsEnterprise() {
-			continue // 企业版门控：无成长体系（growth 403 / claim-gift 400「企业账号不支持该操作」）
 		}
 		if !wait(st.UID) {
 			return
@@ -67,4 +72,25 @@ func (s *Scheduler) runBlackcat(ctx context.Context) {
 		log.Printf("blackcat %s: 完成 %d 次夜间对话", logfmt.Label(a.UID, a.Nickname), ok)
 		time.Sleep(activityAccountDelay)
 	}
+}
+
+// blackcatEligible 夜猫子参与资格。
+func (s *Scheduler) blackcatEligible(st pool.Status) bool {
+	// 暂停选号（paused）账号跳过：夜猫子是全任务体系中唯一「整任务都是
+	// 真实模型对话」的（RunNightChats 逐条 ChatStream 发 glm-5.2 短对话），
+	// 与「让位防风控」正面冲突。旅行/成长任务都是纯上报或领奖 RPC，照常跑。
+	if st.Disabled || st.Paused {
+		return false
+	}
+	a := s.cfg.Pool.AuthByUID(st.UID)
+	if a == nil || a.AccessTokenValue() == "" {
+		return false
+	}
+	if a.IsGlobal() {
+		return false // D4 门控：global 无 CN 任务体系，不发起任何上游调用
+	}
+	if a.IsEnterprise() {
+		return false // 企业版门控：无成长体系（growth 403 / claim-gift 400「企业账号不支持该操作」）
+	}
+	return true
 }

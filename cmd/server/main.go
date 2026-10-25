@@ -321,6 +321,14 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	sch.SetBalanceJitter(cfg.Schedule.BalanceRefreshJitterPermill)
+	sch.SetNightAccountCap(cfg.Schedule.NightAccountCap)
+	if cfg.Schedule.BalanceRefreshJitterPermill > 0 {
+		log.Printf("余额刷新抖动：间隔 ±%d‰，账号错峰起跑（schedule.balance_refresh_jitter_permill）", cfg.Schedule.BalanceRefreshJitterPermill)
+	}
+	if cfg.Schedule.NightAccountCap > 0 {
+		log.Printf("夜猫子参与上限：积分最高的前 %d 个账号（schedule.night_account_cap）", cfg.Schedule.NightAccountCap)
+	}
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
 
@@ -418,7 +426,7 @@ func panelListenPath(listen string) string {
 // 热生效范围（设计取舍）：
 //   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints → livecfg 快照
 //   - pool.* → pool.SetBreaker/SetMaxInFlight/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor
-//   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetExpiringSoonWindow
+//   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetBalanceJitter/SetNightAccountCap/SetExpiringSoonWindow
 //
 // 需重启（涉及监听地址、HTTP client 超时、auth_dir 等装配期依赖）：
 //   - listen / auth_dir / state_file / upstream.* / upstash.* / session_sticky.*（TTL 类）
@@ -518,6 +526,8 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 		!newCfg.Schedule.CheckinEnabled, !newCfg.Schedule.TravelEnabled,
 		!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled, !newCfg.Schedule.BlackcatEnabled,
 		!newCfg.Schedule.GrowthEnabled)
+	sch.SetBalanceJitter(newCfg.Schedule.BalanceRefreshJitterPermill)
+	sch.SetNightAccountCap(newCfg.Schedule.NightAccountCap)
 	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 	sch.SetAccountSpread(time.Duration(newCfg.Schedule.AccountSpreadMinutes)*time.Minute,

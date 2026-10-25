@@ -397,6 +397,8 @@ curl -s http://localhost:7863/v1/chat/completions \
 | `schedule.include_disabled_in_tasks` | `false` | 让**保号类**四任务（签到 / 活跃上报 / token 保活 / 余额刷新）对**已禁用**账号也执行——「禁用」只关选号，不停保号。`false`（默认）保持「禁用的跳过」 |
 | `schedule.account_spread_minutes` | `0` | 账号级摊开窗口（分钟，上限 45）：排程触发的签到 / 旅行 / 活跃 / 保活 / 夜猫子让每个账号在窗口内各自的偏移执行（按任务+账号+日期哈希，当天固定），避免多号同一秒行动；面板手动触发不受影响。`0` 关闭 |
 | `schedule.account_spread_min_gap_seconds` | `0` | 摊开时同批两个账号的最小间隔（秒），`0` 只做随机 |
+| `schedule.balance_refresh_jitter_permill` | `0` | 余额后台刷新抖动（千分比，0–500）：每轮间隔在 ±(值/1000)×间隔内随机偏移，账号在同量级窗口内错峰起跑；面板手动刷新不受影响。`0` 关闭。env `WB2A_SCHEDULE_BALANCE_REFRESH_JITTER_PERMILL` |
+| `schedule.night_account_cap` | `0` | 夜猫子参与上限：`>0` 时只让积分最高的前 N 个合格账号参加，`0` 不限。env `WB2A_SCHEDULE_NIGHT_ACCOUNT_CAP` |
 | `upstream.timeout_seconds` | `120` | 短 RPC（刷新 / 签到 / 余额 / 模型列表）总时长上限 |
 | `upstream.header_timeout_seconds` | 回落 `timeout_seconds` | 聊天首字节前（响应头）上限 |
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流） |

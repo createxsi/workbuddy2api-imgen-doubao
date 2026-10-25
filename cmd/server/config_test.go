@@ -859,3 +859,42 @@ func TestServerReadTimeout(t *testing.T) {
 		t.Error("unparsable read_timeout should fail fast")
 	}
 }
+
+func TestScheduleHumanizeConfig(t *testing.T) {
+	c := Default()
+	if err := c.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Schedule.BalanceRefreshJitterPermill != 0 || c.Schedule.NightAccountCap != 0 {
+		t.Fatalf("缺省应全关：jitter=%d cap=%d", c.Schedule.BalanceRefreshJitterPermill, c.Schedule.NightAccountCap)
+	}
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "c.json")
+	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_jitter_permill":200,"night_account_cap":3}}`), 0o600)
+	c2, err := Load(fp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Schedule.BalanceRefreshJitterPermill != 200 || c2.Schedule.NightAccountCap != 3 {
+		t.Fatalf("解析失败：%+v", c2.Schedule)
+	}
+	for _, bad := range []string{
+		`{"schedule":{"balance_refresh_jitter_permill":501}}`,
+		`{"schedule":{"balance_refresh_jitter_permill":-1}}`,
+		`{"schedule":{"night_account_cap":-1}}`,
+	} {
+		os.WriteFile(fp, []byte(bad), 0o600)
+		if _, err := Load(fp); err == nil {
+			t.Errorf("%s 应报错", bad)
+		}
+	}
+	t.Setenv("WB2A_SCHEDULE_BALANCE_REFRESH_JITTER_PERMILL", "150")
+	t.Setenv("WB2A_SCHEDULE_NIGHT_ACCOUNT_CAP", "4")
+	c3, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c3.Schedule.BalanceRefreshJitterPermill != 150 || c3.Schedule.NightAccountCap != 4 {
+		t.Fatalf("env 覆盖失败：%+v", c3.Schedule)
+	}
+}

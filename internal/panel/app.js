@@ -1039,6 +1039,7 @@ const CFG_MAP = {
   activity_hours: ['schedule', 'activity_hours'], activity_enabled: ['schedule', 'activity_enabled'],
   keepalive_hours: ['schedule', 'keepalive_hours'], keepalive_enabled: ['schedule', 'keepalive_enabled'],
   balance_refresh_enabled: ['schedule', 'balance_refresh_enabled'], balance_refresh_minutes: ['schedule', 'balance_refresh_minutes'],
+  balance_refresh_jitter_permill: ['schedule', 'balance_refresh_jitter_permill'], night_account_cap: ['schedule', 'night_account_cap'],
   include_disabled_in_tasks: ['schedule', 'include_disabled_in_tasks'],
   account_spread_minutes: ['schedule', 'account_spread_minutes'], account_spread_min_gap_seconds: ['schedule', 'account_spread_min_gap_seconds'],
   max_in_flight: ['pool', 'max_in_flight'], max_in_flight_global: ['pool', 'max_in_flight_global'],

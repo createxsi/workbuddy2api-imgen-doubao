@@ -7,6 +7,7 @@ import (
 	"errors"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/session"
 	"log"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -88,6 +89,14 @@ type Scheduler struct {
 	// balanceInterval 余额刷新间隔（纳秒，0=暂停）。atomic 读写：执行循环每轮读当前值，
 	// SetBalanceInterval 可任意时刻热改（面板保存配置）。
 	balanceInterval atomic.Int64
+
+	// balanceJitter 余额刷新周期抖动（千分比 0–500，0 = 关闭），见 humanize.go。
+	// balanceRound 周期刷新轮次计数，参与逐轮抖动散列。
+	balanceJitter atomic.Int64
+	balanceRound  atomic.Uint64
+
+	// nightAccountCap 夜猫子参与上限（>0 = 只让积分最高的前 N 个合格账号参加；0 = 不限）。
+	nightAccountCap atomic.Int64
 }
 
 // New 构建。
@@ -651,6 +660,12 @@ func (s *Scheduler) runKeepalive(ctx context.Context) {
 // 但不做签到、不刷新 token——只让"积分"这个观测量保持新鲜。
 // 供两类入口复用：后台周期任务（StartBalanceRefresh）与面板手动全量刷新。
 func (s *Scheduler) RunBalanceRefreshNow() {
+	s.runBalanceRefresh(context.Background(), 0, 0)
+}
+
+// runBalanceRefresh 余额刷新遍历。window>0 时各账号在 [0, window) 内错峰起跑
+// （仅周期路径传入；手动刷新恒为 0 = 全并发立即跑完）；ctx 取消时未起跑的账号放弃。
+func (s *Scheduler) runBalanceRefresh(ctx context.Context, window time.Duration, round uint64) {
 	var wg sync.WaitGroup
 	expiringSoon := s.ExpiringSoonWindow()
 	includeDisabled := s.includeDisabledInTasks()
@@ -663,8 +678,11 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			continue
 		}
 		wg.Add(1)
-		go func(a *auth.Auth, uid string) {
+		go func(a *auth.Auth, uid string, wait time.Duration) {
 			defer wg.Done()
+			if wait > 0 && !sleepCtx(ctx, wait) {
+				return
+			}
 			remain, total, expiring, earliestAt, earliestRemaining, err := s.cfg.Upstream.UserResourceDetailedWithExpiry(a, expiringSoon)
 			if err != nil {
 				log.Printf("balance %s: %v", logfmt.Label(uid, a.Nickname), err)
@@ -672,7 +690,7 @@ func (s *Scheduler) RunBalanceRefreshNow() {
 			}
 			s.cfg.Pool.ReenableIfCredits(uid, remain, total)
 			s.cfg.Pool.SetCreditsDetailed(uid, remain, total, expiring, earliestAt, earliestRemaining)
-		}(a, st.UID)
+		}(a, st.UID, staggerDelay(window, round, st.UID))
 	}
 	wg.Wait()
 }
@@ -703,7 +721,15 @@ func (s *Scheduler) StartBalanceRefresh(ctx context.Context, interval time.Durat
 					continue
 				}
 			}
-			timer := time.NewTimer(cur)
+			// 人味化（schedule.balance_refresh_jitter_permill）：本轮间隔在 ±frac×cur 内偏移，
+			// 账号在 frac×cur 窗口内错峰起跑；frac=0 时与旧行为一致。
+			frac := float64(s.balanceJitter.Load()) / 1000
+			round := s.balanceRound.Add(1)
+			delay := cur + periodicJitter(cur, frac, "bal|"+strconv.FormatUint(round, 10))
+			if delay <= 0 {
+				delay = cur
+			}
+			timer := time.NewTimer(delay)
 			select {
 			case <-ctx.Done():
 				timer.Stop()
@@ -711,7 +737,7 @@ func (s *Scheduler) StartBalanceRefresh(ctx context.Context, interval time.Durat
 			case <-s.rearmBalance:
 				timer.Stop() // 间隔已变：立刻按新值重算
 			case <-timer.C:
-				s.RunBalanceRefreshNow()
+				s.runBalanceRefresh(ctx, staggerWindow(cur, frac), round)
 			}
 		}
 	}()
