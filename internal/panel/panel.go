@@ -615,7 +615,18 @@ func (p *Panel) accountDisable(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "account not found")
 		return
 	}
-	p.cfg.Pool.Disable(uid, "manual disable (panel)")
+	// 可选 body {"reason":"..."} 补录真实原因；缺省为人工禁用。
+	reason := "manual disable (panel)"
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req)
+	}
+	if v := strings.TrimSpace(req.Reason); v != "" {
+		reason = "manual disable (panel): " + v
+	}
+	p.cfg.Pool.Disable(uid, reason)
 	log.Printf("panel: disable uid=%s（人工禁用）", uid)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

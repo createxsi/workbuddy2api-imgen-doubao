@@ -53,6 +53,7 @@ func (p *Pool) disableLocked(e *entry, reason string) {
 	e.disabled = true
 	e.paused = false // 禁用是比暂停更强的终态，二者不叠加（禁用后须 revive 才能复用）
 	e.reason = reason
+	e.disabledAt = time.Now()
 	p.dirty.Store(true)
 }
 

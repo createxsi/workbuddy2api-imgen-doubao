@@ -64,6 +64,7 @@ const end = src.indexOf('async function loadBalance');
 if (start < 0 || end < 0) throw new Error('balance region not found');
 const els = {};
 const ctx = { Number, String, Math, Date, Map, Array, Object, Infinity, esc: s => String(s), overviewData: { accounts: [{ uid: 'u2', disabled: true }] },
+  disabledKind: () => ({ label: '上游封禁', tone: 'bad' }),
   localStorage: { getItem: () => null }, $: id => (els[id] = els[id] || { innerHTML: '' }) };
 vm.createContext(ctx);
 vm.runInContext("'use strict';\n" + src.slice(start, end) +
@@ -83,7 +84,7 @@ process.stdout.write(JSON.stringify({
   chart: els.bhChart.innerHTML.includes('<polyline') && els.bhChart.innerHTML.includes('#123456'),
   daily: (els.bhDaily.innerHTML.match(/<rect/g) || []).length === 6,
   realm: ctx.bhPickRealm([{ realm: 'global' }]),
-  mark: ctx.bhAcctMark('u2').includes('已禁用') && ctx.bhAcctMark('u1') === '',
+  mark: ctx.bhAcctMark('u2').includes('上游封禁') && ctx.bhAcctMark('u1') === '',
 }));`
 	f, err := os.CreateTemp(t.TempDir(), "bh-*.cjs")
 	if err != nil {
@@ -98,6 +99,44 @@ process.stdout.write(JSON.stringify({
 		t.Fatalf("node: %v\n%s", err, out)
 	}
 	const want = `{"day":"2026-10-26","month":true,"chart":true,"daily":true,"realm":"global","mark":true}`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("got %s want %s", out, want)
+	}
+}
+
+func TestAppJSDisabledKind(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function disabledKind');
+const end = src.indexOf('function rateLimitRowsHtml');
+const ctx = { String, Math, Date, Number };
+vm.createContext(ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.disabledKind=disabledKind; this.disabledAge=disabledAge;', ctx);
+const k = r => ctx.disabledKind(r).label;
+const now = Date.parse('2026-10-26T00:00:00Z');
+process.stdout.write(JSON.stringify([
+  k('account restricted by upstream (11140 request illegal); appeal'), k('12153 session dead'), k('refresh session dead'),
+  k('gateway 401'), k('manual disable (panel)'), k('other'),
+  ctx.disabledAge('2026-10-23T00:00:00Z', now), ctx.disabledAge('2026-10-25T23:30:00Z', now), ctx.disabledAge('', now),
+]));`
+	f, err := os.CreateTemp(t.TempDir(), "dk-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(script); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	const want = `["上游封禁","登录失效","登录失效","鉴权失败","手动禁用","已禁用","3 天前","30 分钟前",""]`
 	if strings.TrimSpace(string(out)) != want {
 		t.Fatalf("got %s want %s", out, want)
 	}

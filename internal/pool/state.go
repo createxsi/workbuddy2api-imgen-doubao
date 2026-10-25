@@ -66,6 +66,7 @@ func (p *Pool) ReviveDisabled(uid string) {
 	if e, ok := p.byUID[uid]; ok && e.disabled {
 		e.disabled = false
 		e.reason = ""
+		e.disabledAt = time.Time{}
 		e.sessionDeadFails = 0
 		p.dirty.Store(true)
 	}
@@ -83,6 +84,7 @@ func (p *Pool) Revive(uid string) bool {
 		return false
 	}
 	e.disabled = false
+	e.disabledAt = time.Time{}
 	e.paused = false // 解冻是全清：暂停选号一并解除
 	e.until = time.Time{}
 	e.coolKind = 0
@@ -584,6 +586,9 @@ func (p *Pool) statusOf(uid string, e *entry) Status {
 	if st.Disabled {
 		// 禁用账号透出禁用原因（运维看不到为什么死）。
 		st.DisabledReason = e.reason
+		if !e.disabledAt.IsZero() {
+			st.DisabledAt = e.disabledAt.Format(time.RFC3339)
+		}
 	}
 	if st.Cooling {
 		// 冷却剩余秒数（向上取整，避免 0 显示为已到期）。

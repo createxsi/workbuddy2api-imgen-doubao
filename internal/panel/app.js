@@ -288,6 +288,26 @@ function rateLimitMeta(row, now) {
   }
   return { model, kind, detail, title: title.join('\n') };
 }
+// disabledKind 禁用原因归类：不同成因处置不同（封禁要申诉、登录失效要重登、手动禁用随时可恢复）。
+// 按严重度优先匹配；原始 reason 仍另行展示。
+function disabledKind(reason) {
+  const r = String(reason || '').toLowerCase();
+  if (/11140|banned|restricted|request illegal/.test(r)) return { label: '上游封禁', tone: 'bad', action: '需在官方申诉，解冻无效' };
+  if (/12153|session dead|refresh.*(失败|reject)/.test(r)) return { label: '登录失效', tone: 'bad', action: '需重新登录' };
+  if (/401|unauthori/.test(r)) return { label: '鉴权失败', tone: 'warn', action: '确认后重登或解冻' };
+  if (/manual|手动/.test(r)) return { label: '手动禁用', tone: 'warn', action: '随时可解冻' };
+  return { label: '已禁用', tone: 'warn', action: '' };
+}
+// disabledAge 禁用时长：刚禁和禁了一周的处置优先级不同。
+function disabledAge(at, now) {
+  const t = Date.parse(at || '');
+  if (!Number.isFinite(t)) return '';
+  const sec = Math.max(0, ((now || Date.now()) - t) / 1000);
+  if (sec < 60) return '刚刚';
+  if (sec < 3600) return Math.floor(sec / 60) + ' 分钟前';
+  if (sec < 86400) return Math.floor(sec / 3600) + ' 小时前';
+  return Math.floor(sec / 86400) + ' 天前';
+}
 function rateLimitRowsHtml(rows, now, uid) {
   const list = Array.isArray(rows) ? rows.filter(row => row && row.model) : [];
   if (!list.length) return '';
@@ -403,7 +423,8 @@ function renderAccounts(list) {
     const dg = (new Date(s.degrade_until || 0) - Date.now()) / 1000;
     const cool = Math.max(s.cool_remaining_sec || 0, bl > 0 ? bl : 0, dg > 0 ? dg : 0);
     let cls = '', tag;
-    if (s.disabled) { cls = 'off'; tag = '<span class="tag bad">已禁用</span>'; }
+    const dk = s.disabled ? disabledKind(s.disabled_reason || s.reason) : null;
+    if (dk) { cls = 'off'; tag = '<span class="tag ' + dk.tone + '">' + esc(dk.label) + '</span>'; }
     else if (s.paused) { cls = 'off'; tag = '<span class="tag warn">已暂停选号</span>'; }
     else if (cool > 0) {
       cls = 'cool';
@@ -411,7 +432,11 @@ function renderAccounts(list) {
         : (dg > (s.cool_remaining_sec || 0) ? '连败降权' : (s.cool_kind === 'hard_credit' ? '积分冷却' : '限流冷却'));
       tag = '<span class="tag warn">' + kind + ' · ' + dur(cool) + '</span>';
     } else tag = '<span class="tag ok">可用</span>' + (s.in_flight ? '' : '');
-    const note = s.reason ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' + esc(s.reason) + '</div>' : '';
+    // 禁用：首行「时长 · 建议动作」，次行原始 reason（细节）。
+    const dAge = dk ? disabledAge(s.disabled_at) : '';
+    const dHead = dk ? [dAge, dk.action].filter(Boolean).join(' · ') : '';
+    const note = s.reason || dHead ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' +
+      (dHead ? '<div>' + esc(dHead) + '</div>' : '') + esc(s.reason || '') + '</div>' : '';
     const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now(), s.uid);
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
     // 企业版不限量：上游 limitNum == -1，网关以 credits_total=-1 透出（见 upstream
@@ -3347,7 +3372,10 @@ function bhAccountRow(s, color, nowMs) {
 function bhAcctMark(uid) {
   const a = bhAcctState(uid);
   if (!a) return '';
-  if (a.disabled) return ' <span class="tag bad">已禁用</span>';
+  if (a.disabled) {
+    const k = disabledKind(a.disabled_reason || a.reason);
+    return ' <span class="tag ' + k.tone + '" title="' + esc(a.disabled_reason || a.reason || '') + '">' + esc(k.label) + '</span>';
+  }
   if (a.paused) return ' <span class="tag warn">暂停选号</span>';
   return '';
 }

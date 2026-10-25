@@ -158,6 +158,7 @@ func (p *Pool) applyAccountsLocked(accounts map[string]stateAccount) {
 			disabled:                 s.Disabled,
 			paused:                   s.Paused,
 			reason:                   s.Reason,
+			disabledAt:               derefTime(s.DisabledAt),
 			until:                    s.Until,
 			coolKind:                 s.CoolKind,
 			successCount:             s.SuccessCount,
@@ -309,6 +310,10 @@ func (p *Pool) stateOverviewLocked() stateFile {
 			CreditsEarliestExpiry:    e.creditsEarliestExpiry,
 			CreditsEarliestRemaining: e.creditsEarliestRemaining,
 		}
+		if e.disabled && !e.disabledAt.IsZero() {
+			at := e.disabledAt
+			s.DisabledAt = &at
+		}
 		// 熔断截止：仅未过期才落盘（指针 nil 才能被 omitempty 真省略）。
 		if !e.breakerUntil.IsZero() && now.Before(e.breakerUntil) {
 			u := e.breakerUntil
@@ -347,4 +352,11 @@ func (p *Pool) stateOverviewLocked() stateFile {
 		sf.Accounts[uid] = s
 	}
 	return sf
+}
+
+func derefTime(t *time.Time) time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	return *t
 }

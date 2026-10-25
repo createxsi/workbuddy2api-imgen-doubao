@@ -90,6 +90,8 @@ type Status struct {
 	Enterprise      bool       `json:"enterprise,omitempty"`
 	Disabled        bool       `json:"disabled"`
 	DisabledReason  string     `json:"disabled_reason,omitempty"` // 仅 disabled 账号：禁用原因（运维可见）
+	// DisabledAt 禁用时刻（RFC3339，仅 disabled 账号）：分清「刚被禁」与「禁了很久没人管」。
+	DisabledAt string `json:"disabled_at,omitempty"`
 	// Paused 暂停选号：退出选号候选（与 disabled 一样不参与选号），但**照常参与**
 	// 签到 / 活跃上报 / 保活 / 余额刷新四类保号任务。与 disabled 正交——disabled 是
 	// 「授权/session 终态，需人工 revive」，paused 是「运维临时让位」（多号轮换场景），
@@ -206,6 +208,7 @@ type entry struct {
 	// 保活 / 余额刷新。持久化（state.json），跨重启不丢。
 	paused         bool
 	reason         string
+	disabledAt     time.Time // 禁用时刻（零值 = 未禁用或旧状态文件无记录）
 	lastUsed       time.Time // 最近被选中时刻（防并发撞号）
 	// usedSeq 单调递增的选中序号：每次被 pick 选中时取 p.pickSeq 自增值。
 	// Windows 等平台 time.Now() 精度有限（~0.5ms），高并发/快速连续选号时多个
@@ -423,6 +426,7 @@ type stateAccount struct {
 	Disabled     bool      `json:"disabled"`
 	Paused       bool      `json:"paused,omitempty"`
 	Reason       string    `json:"reason,omitempty"`
+	DisabledAt   *time.Time `json:"disabled_at,omitempty"` // 仅禁用账号落盘
 	Until        time.Time `json:"until,omitempty"`
 	CoolKind     CoolKind  `json:"cool_kind"`
 	SuccessCount int64     `json:"success_count,omitempty"`
