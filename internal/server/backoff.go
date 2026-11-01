@@ -98,6 +98,25 @@ func waitPast(d time.Duration) time.Duration {
 	return d + time.Duration(float64(d)*rand.Float64()*jitterFraction)
 }
 
+// waitForSlot 在「号都在途占满」时等一个空名额：轮询 slotPoll，上限 busyWaitCap
+// （与 14003 等待共用预算）。返回 false = 客户端断连。名额空出或池况变成别的原因
+// 都提前返回，由调用方重选一次定论。
+func waitForSlot(ctx context.Context, p *pool.Pool, tried map[string]bool, model, realm string) bool {
+	deadline := time.Now().Add(busyWaitCap)
+	for time.Now().Before(deadline) {
+		if !sleepCtx(ctx, slotPoll) {
+			return false
+		}
+		if !p.SlotWaitForRealm(tried, model, realm) {
+			return true
+		}
+	}
+	return true
+}
+
+// slotPoll 等在途名额的轮询间隔。
+const slotPoll = 50 * time.Millisecond
+
 // sleepCtx 可取消的等待：ctx 取消立即返回 false（客户端断连/优雅停机不必等退避
 // 睡醒），等满返回 true。d<=0 立即放行。与 scheduler.sleepCtx 同模式（该函数未
 // 导出且 scheduler 不宜被 server 反向依赖，按任务书「等价物」口径在消费侧实现）。

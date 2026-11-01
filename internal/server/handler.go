@@ -621,6 +621,8 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	var modelBlock pool.ModelBlockStatus
 	// busyWaited 本次请求是否已经为「模型繁忙」等过一轮（见 acct==nil 分支）。
 	busyWaited := false
+	// slotWaited 本次请求是否已经为「号都在途占满」等过一轮名额。
+	slotWaited := false
 
 	// 会话粘性：从请求体提取会话键并解析绑定号（找不到/无效则 stickyUID 为空，走普通轮换）。
 	// ExtractKey 与粘性开关解耦（issue #35 侧）：关闭粘性时会话头族的聚合主键仍按
@@ -843,6 +845,17 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 				}
+			}
+			// 号对该模型健康、只是在途名额都占满：等一个名额再重选一次，而不是直接 503。
+			// 只等一次、不占名额、不算换号；上限 busyWaitCap。
+			if !slotWaited && busyWaitCap > 0 && h.cfg.Pool.SlotWaitForRealm(tried, bareModel, realm) {
+				slotWaited = true
+				log.Printf("slot-wait: model=%s realm=%q all healthy accounts at in-flight cap, waiting up to %s", bareModel, realm, busyWaitCap)
+				if !waitForSlot(r.Context(), h.cfg.Pool, tried, bareModel, realm) {
+					break
+				}
+				i--
+				continue
 			}
 			st.status = http.StatusServiceUnavailable
 			// 记下"是不是模型级阻塞"。选号返回 nil 有两种完全不同的成因：

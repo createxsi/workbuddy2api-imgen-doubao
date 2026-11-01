@@ -97,3 +97,27 @@ func (p *Pool) AvailableUIDsForModelRealm(model, realm string) []string {
 	sort.Strings(uids)
 	return uids
 }
+
+// SlotWaitForRealm 报告「此刻选不到号只是因为号都在途占满」：本域存在对该模型健康
+// （未冷却/未停牌/未禁用）且未被积分保底挡住、也未在本请求试过的账号，只是名额已满。
+// 与冷却不同，在途名额几十毫秒到几秒内就会释放，调用方据此等一个名额而非直接 503。
+func (p *Pool) SlotWaitForRealm(tried map[string]bool, model, realm string) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	now := time.Now()
+	for uid, e := range p.byUID {
+		if tried != nil && tried[uid] {
+			continue
+		}
+		if realm != "" && e.a.Realm() != realm {
+			continue
+		}
+		if !e.healthyForModel(now, model) {
+			continue
+		}
+		if p.inFlightFull(e) && !p.floorBlockedForRealmModel(e, model, realm, now) {
+			return true
+		}
+	}
+	return false
+}
