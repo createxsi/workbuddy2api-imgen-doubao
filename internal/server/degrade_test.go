@@ -76,3 +76,20 @@ func TestDegradeGateTriggerNoRenewal(t *testing.T) {
 		t.Errorf("Trigger during active should not renew: first=%v second=%v", first, second)
 	}
 }
+
+func TestRescueSystemPromptLadder(t *testing.T) {
+	multi := []byte(`{"messages":[{"role":"system","content":"One. Two."},{"role":"user","content":"hi"}]}`)
+	if _, step := rescueSystemPrompt(multi, 0); step != degradeSplit {
+		t.Fatalf("step=%d want split", step)
+	}
+	if _, step := rescueSystemPrompt(multi, degradeSplit); step != degradeMove {
+		t.Fatalf("step=%d want move", step)
+	}
+	if _, step := rescueSystemPrompt(multi, degradeMove); step != degradeRewrite {
+		t.Fatalf("step=%d want rewrite", step)
+	}
+	single := []byte(`{"messages":[{"role":"system","content":"One"},{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	if _, step := rescueSystemPrompt(single, 0); step != degradeRewrite {
+		t.Fatalf("拆不动搬不动应直接替换: step=%d", step)
+	}
+}

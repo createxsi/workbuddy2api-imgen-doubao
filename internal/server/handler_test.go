@@ -1583,8 +1583,9 @@ func TestContentBlockedTriggersDegradedRetry(t *testing.T) {
 	if !strings.Contains(string(bodies[1]), prompt.Degraded) {
 		t.Errorf("second body should contain Degraded prompt: %s", bodies[1])
 	}
-	if strings.Contains(string(bodies[1]), "原始指纹") {
-		t.Errorf("second body should not contain original system: %s", bodies[1])
+	// 单句 system 拆不动，走「搬家」：原文进首条 user，一字不丢。
+	if !strings.Contains(string(bodies[1]), `原始指纹\n\nhi`) {
+		t.Errorf("second body should move original system into user: %s", bodies[1])
 	}
 }
 

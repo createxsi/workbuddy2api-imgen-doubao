@@ -791,14 +791,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	//   - passthrough / append 非降级期：透传客户端原始 system（append 则再插一条网关 system）。
 	// 降级裁决：append 在降级期退化为 replace（Rewrite(Degraded)）——append 带
 	// 指纹原文重试是确定性再撞墙，replace 是一次性最小抢救（issue #129 设计 §4）。
-	degradedApplied := false
+	// degradeStep 11128 抢救阶梯已用到第几层（0 未用；见 rescueSystemPrompt），每层同请求只用一次。
+	degradeStep := 0
 	if h.cfg.PromptMode == "custom" && h.cfg.PromptText != "" {
 		body = prompt.Rewrite(body, h.cfg.PromptText)
 	} else if h.cfg.PromptMode == "append" && h.cfg.PromptText != "" && !h.degrade.Active() {
 		body = prompt.Append(body, h.cfg.PromptText)
 	} else if (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && h.degrade.Active() {
-		body = prompt.Rewrite(body, prompt.Degraded)
-		degradedApplied = true
+		// 降级期：与重试阶梯同序——拆句留在 system 最好，其次搬进首条 user，都不行才替换。
+		body, degradeStep = rescueSystemPrompt(body, 0)
 	}
 
 	// outbound model 名重写为 bareModel（D6）：realm 前缀是网关侧路由协议，
@@ -1011,13 +1012,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 降级重试同样退化为 replace——原文在场只会确定性再撞 400）。
 			// 第二次仍被拦（用户内容本身触发审核）→ 回内容防火墙错误（见下分支）。
 			// 内容问题非账号问题：applyErrorPolicy 不罚账号（见 ErrContentBlocked 分支）。
-			if kind == upstream.ErrContentBlocked && (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && !degradedApplied {
+			// 抢救分三层，改动由小到大：① 最长 system 按句界拆成多条（文本不改，仍在 system）；
+			// ② 原文搬进首条 user、system 换中性提示词；③ 中性提示词整体替换。
+			if kind == upstream.ErrContentBlocked && (h.cfg.PromptMode == "passthrough" || h.cfg.PromptMode == "append") && degradeStep < degradeRewrite {
 				h.degrade.Trigger()
-				body = prompt.Rewrite(body, prompt.Degraded)
-				degradedApplied = true
+				body, degradeStep = rescueSystemPrompt(body, degradeStep)
 				delete(tried, acct.UID) // 单账号池也能拿到重试机会（降级重试占一次名额）
 				releaseHeld()
-				log.Printf("content-blocked (likely fingerprint false positive) -> degraded prompt retry")
+				log.Printf("content-blocked (likely fingerprint false positive) -> prompt rescue step %d retry", degradeStep)
 				continue
 			}
 			if kind == upstream.ErrContentBlocked {
