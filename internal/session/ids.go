@@ -81,6 +81,25 @@ func NewConversationID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
 }
 
+// NewTimeOrderedID 生成 UUIDv7（前 48 bit 为当前毫秒），对齐真机 X-Conversation-ID /
+// acp-connection-id 的时间有序形态（01a1815d-dacf-75f1-…）。
+func NewTimeOrderedID() string {
+	var b [16]byte
+	ms := uint64(time.Now().UnixMilli())
+	for i := 0; i < 6; i++ {
+		b[i] = byte(ms >> (40 - 8*uint(i)))
+	}
+	if _, err := cryptorand.Read(b[6:]); err != nil {
+		v := rand.Uint64()
+		for i := 6; i < 14; i++ {
+			b[i] = byte(v >> (8 * uint(i-6)))
+		}
+	}
+	b[6] = (b[6] & 0x0f) | 0x70 // version 7
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
 // NewTraceID 生成链路 trace ID：32 hex，**纯随机、不带时间位**。
 //
 // 与 NewMessageID 的区别是故意的：官方国际版 5.8.4 真机抓包里

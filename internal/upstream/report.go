@@ -13,6 +13,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
@@ -33,6 +34,9 @@ func (c *Client) billingJSON(a *auth.Auth, method, path string, body any) (json.
 			return nil, err
 		}
 		rdr = bytes.NewReader(raw)
+	} else if method == http.MethodPost {
+		// 无 body 的 POST 发 `{}`（真机 billing 族 POST Content-Length 恒为 2）。
+		rdr = strings.NewReader("{}")
 	}
 	req, err := http.NewRequest(method, c.billingBase(a)+path, rdr)
 	if err != nil {

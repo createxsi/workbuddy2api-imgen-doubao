@@ -11,6 +11,7 @@ package upstream
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -62,9 +63,36 @@ func InjectPromptCacheKey(body []byte, uid, conversationID string) []byte {
 }
 
 // cacheKeySource prompt_cache_key 的会话段来源：客户端声明的会话（ConversationID）优先，
-// 为空时调用方按「无会话源」处理。
+// 其次网关会话键（CacheKeyID）；都空时调用方按「无会话源」处理。
 func cacheKeySource(meta ChatMeta) string {
-	return meta.ConversationID
+	if meta.ConversationID != "" {
+		return meta.ConversationID
+	}
+	return meta.CacheKeyID
+}
+
+// buildTimeOrderedUUID 由 (uid, conversation, purpose) 稳定派生 UUIDv7 形态的 36 字符值：
+// 时间段取锚点 2026-01-01 起约 24 个月窗口内的哈希偏移（同输入恒同值，形态与真机
+// 时间有序 ID 一致），其余位取哈希。用于 X-Conversation-ID / acp-connection-id。
+func buildTimeOrderedUUID(uid, conversation, purpose string) string {
+	in := uid + "|" + conversation
+	if purpose != "" {
+		in += "|" + purpose
+	}
+	sum := sha256.Sum256([]byte(in))
+	const (
+		anchorMS = int64(1767225600000)                 // 2026-01-01 00:00 UTC
+		windowMS = int64(24 * 30 * 24 * 60 * 60 * 1000) // ≈24 个月
+	)
+	ms := uint64(anchorMS + int64(binary.BigEndian.Uint64(sum[8:16])%uint64(windowMS)))
+	var u [16]byte
+	for i := 0; i < 6; i++ {
+		u[i] = byte(ms >> (40 - 8*uint(i)))
+	}
+	copy(u[6:], sum[:10])
+	u[6] = (u[6] & 0x0f) | 0x70 // version 7
+	u[8] = (u[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", u[0:4], u[4:6], u[6:8], u[8:10], u[10:16])
 }
 
 // buildCacheKey 生成与官方客户端同形的会话标识：UUID v4 形态的 36 字符。

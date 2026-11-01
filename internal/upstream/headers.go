@@ -179,8 +179,7 @@ func acceptLanguageFor(a *auth.Auth) string {
 	return "zh"
 }
 
-// injectCodeBuddyRequest 在 req 注入 X-CodeBuddy-Request: 1。
-// billing 域未走 CommonHeaders，单独注入保证全出站覆盖（D1）。
+// injectCodeBuddyRequest 在 req 注入 X-CodeBuddy-Request: 1（真机仅 chat / 生图带）。
 func (c *Client) injectCodeBuddyRequest(req *http.Request) {
 	req.Header.Set("X-CodeBuddy-Request", "1")
 }
@@ -191,7 +190,10 @@ func (c *Client) injectCodeBuddyRequest(req *http.Request) {
 // 复用同值；TraceID 透传入站值（空 = 回落 conversationRequestID）。
 // messageID（消息级，每条独立）由 ChatHeaders 内部生成，无需外部可见。
 type ChatMeta struct {
-	ConversationID        string // X-Conversation-ID：body 提取的入站值，空则不发（透传优先，不伪造）
+	ConversationID string // X-Conversation-ID：客户端声明的会话 ID，原值透传
+	// CacheKeyID 客户端未声明会话时网关认定的会话键（粘性键 / 派生键）：用于缓存槽，
+	// 出站头只放它的 (uid, 键) 派生 UUIDv7，原值不上头。
+	CacheKeyID            string
 	ConversationRequestID string // X-Conversation-Request-ID / X-Root-Request-ID：聚合主键，必发
 	TraceID               string // X-Trace-ID：入站透传值，空则回落 conversationRequestID
 }
@@ -228,9 +230,9 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 		if a.EnterpriseID != "" {
 			req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
 		}
-		if d := a.DomainValue(); d != "" {
-			req.Header.Set("X-Domain", d)
-		}
+		// X-Domain 必发且为对话域裸主机名（真机恒 www.workbuddy.cn），不取 auth 落盘的
+		// 旧登录域。
+		req.Header.Set("X-Domain", c.chatHost(a))
 	} else {
 		c.injectGlobalChatHeaders(req, a)
 	}
@@ -305,11 +307,16 @@ func (c *Client) injectConversationHeaders(req *http.Request, uid string, meta C
 	// 请求会直接 400 / 11128（conversation id missing）。入站没带会话 ID 时
 	// 本级补一个 32 hex（与 X-Conversation-Request-ID 的零值兜底同口径），
 	// 不再因为「透传优先」而漏发该头（issue #190）。
-	conversationID := meta.ConversationID
-	if conversationID == "" {
-		conversationID = session.NewConversationID()
+	// 形态对齐真机 UUIDv7（01a1815d-dacf-75f1-…）：客户端声明的原值透传；否则按
+	// (uid, 会话键) 稳定派生 v7；都没有现造 v7。
+	switch {
+	case meta.ConversationID != "":
+		req.Header.Set("X-Conversation-ID", meta.ConversationID)
+	case meta.CacheKeyID != "":
+		req.Header.Set("X-Conversation-ID", buildTimeOrderedUUID(uid, meta.CacheKeyID, ""))
+	default:
+		req.Header.Set("X-Conversation-ID", session.NewTimeOrderedID())
 	}
-	req.Header.Set("X-Conversation-ID", conversationID)
 	req.Header.Set("X-Conversation-Request-ID", convReqID)
 	req.Header.Set("X-Conversation-Message-ID", messageID)
 	req.Header.Set("X-Request-ID", messageID)
@@ -352,9 +359,9 @@ func (c *Client) injectConversationHeaders(req *http.Request, uid string, meta C
 	// 网关没有 ACP 连接层，按「同 (账号, 会话) 稳定、与会话 ID 不同值」派生，
 	// 语义与官方一致；无会话源时现造一个（该路径无跨请求稳定语义）。
 	if src := cacheKeySource(meta); src != "" {
-		req.Header.Set("acp-connection-id", buildStableUUID(uid, src, "acp"))
+		req.Header.Set("acp-connection-id", buildTimeOrderedUUID(uid, src, "acp"))
 	} else {
-		req.Header.Set("acp-connection-id", session.NewConversationID())
+		req.Header.Set("acp-connection-id", session.NewTimeOrderedID())
 	}
 }
 
@@ -496,17 +503,16 @@ func hostOf(base, fallback string) string {
 	return base
 }
 
-// BillingHeaders billing 接口请求头。
-// UA 语义：默认**不设置**（保持现状，Go 客户端自带默认 UA）；仅当显式配置
-// c.UserAgent 非空才覆盖——避免默认路径给 billing 引入新的 UA 指纹。
+// BillingHeaders billing 接口请求头（签到 / 余额 / growth）。
+// 真机 billing 族带纯随机 32 hex X-Request-ID，不带 X-CodeBuddy-Request /
+// Accept-Language；X-Domain 恒发裸主机名。UA：显式 user_agent 优先，否则单段
+// WorkBuddy/<ver>（client_name="SaaS" 时不设）。
 func (c *Client) BillingHeaders(req *http.Request, a *auth.Auth) {
 	// AccessToken 加锁快照（同 ChatHeaders：keepalive 可在 a.mu 内改写）。
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
-	c.injectCodeBuddyRequest(req)
-	// Accept-Language 按 realm 切（D5，billing 域未走 CommonHeaders，单独注入）。
-	req.Header.Set("Accept-Language", acceptLanguageFor(a))
+	req.Header.Set("X-Request-ID", session.NewTraceID())
 	if c != nil && c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
 	} else if ua := c.billingUA(a); ua != "" {
@@ -519,22 +525,41 @@ func (c *Client) BillingHeaders(req *http.Request, a *auth.Auth) {
 		req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
 		req.Header.Set("X-Tenant-Id", a.EnterpriseID)
 	}
-	if d := a.DomainValue(); d != "" {
-		req.Header.Set("X-Domain", d)
-	}
-	// 设备风控头：billing 域（report/travel/balance/checkin）同样注入。
+	req.Header.Set("X-Domain", domainOrHost(a, req))
+	// 设备风控头：billing 域（travel/balance/checkin）同样注入。
 	c.injectDeviceToken(req, a)
 }
 
 // RefreshHeaders refresh 端点专属头（X-Refresh-Token 只允许出现在这里）。
-// 5.9.3 真机 refresh 带 X-Requested-With，其余同 RPC 公共头。
+// 真机（5.9.3 / 5.9.4）refresh 为 RPC 族：不带 X-Requested-With；Authorization 与
+// X-Refresh-Token 双发，另带 X-Request-ID / X-User-Id / X-Domain，body 为 `{}`。
 func (c *Client) RefreshHeaders(req *http.Request, a *auth.Auth) {
 	c.CommonHeaders(req, a)
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.Header.Set("X-Domain", domainOrHost(a, req))
 	req.Header.Set("X-Refresh-Token", a.RefreshToken)
 	if a.EnterpriseID != "" {
 		req.Header.Set("X-Enterprise-Id", a.EnterpriseID)
 	}
 	// X-Auth-Refresh-Source 对齐官方客户端 refresh 渠道标识 "plugin"（D3）。
 	req.Header.Set("X-Auth-Refresh-Source", "plugin")
+	req.Header.Set("X-Request-ID", session.NewTraceID())
+	if at := a.AccessTokenValue(); at != "" {
+		req.Header.Set("Authorization", "Bearer "+at)
+	}
+	if a.UID != "" {
+		req.Header.Set("X-User-Id", a.UID)
+	}
+}
+
+// domainOrHost X-Domain 取值：auth 落盘 domain（剥 scheme）优先，否则请求目标主机名。
+func domainOrHost(a *auth.Auth, req *http.Request) string {
+	if a != nil {
+		if d := hostOf(strings.TrimSpace(a.DomainValue()), ""); d != "" {
+			return d
+		}
+	}
+	if req != nil && req.URL != nil {
+		return req.URL.Hostname()
+	}
+	return "www.workbuddy.cn"
 }

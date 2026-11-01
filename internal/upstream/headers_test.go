@@ -21,8 +21,8 @@ func TestChatHeadersAlwaysSendConversationTrio(t *testing.T) {
 	c.ChatHeaders(req, testAuth(), "", ChatMeta{})
 
 	hex32 := regexp.MustCompile(`^[0-9a-f]{32}$`)
-	if v := req.Header.Get("X-Conversation-ID"); !uuidV4Re.MatchString(v) {
-		t.Errorf("X-Conversation-ID = %q, want UUID v4（官方形态）", v)
+	if v := req.Header.Get("X-Conversation-ID"); !uuidV7Re.MatchString(v) {
+		t.Errorf("X-Conversation-ID = %q, want UUID v7（真机形态）", v)
 	}
 	for _, h := range []string{
 		"X-Conversation-Request-ID",

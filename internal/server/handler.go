@@ -839,14 +839,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	// the upstream prompt_cache_key degrades into one constant per account and
 	// every client on that account ends up sharing a single, constantly evicted
 	// prefix-cache slot.
-	convID := session.ResolveConversationID(body)
-	if convID == "" {
-		convID = sessKey
+	// 客户端声明的会话 ID 原值透传；否则缓存槽键取粘性键 / 派生键（上头时只放派生 v7）。
+	chatMeta := upstream.ChatMeta{ConversationID: session.ResolveConversationID(body)}
+	if chatMeta.ConversationID == "" {
+		chatMeta.CacheKeyID = sessKey
+		if chatMeta.CacheKeyID == "" {
+			chatMeta.CacheKeyID = session.DeriveCacheKey(body)
+		}
 	}
-	if convID == "" {
-		convID = session.DeriveCacheKey(body)
-	}
-	chatMeta := upstream.ChatMeta{ConversationID: convID}
 	if v := r.Header.Get("X-Conversation-Request-ID"); v != "" {
 		chatMeta.ConversationRequestID = v
 	} else if turnKey != "" && sessKey != "" {
