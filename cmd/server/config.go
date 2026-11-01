@@ -17,7 +17,7 @@ import (
 
 // Config 顶层配置。
 type Config struct {
-	Listen    string `json:"listen"`     // ":7863"
+	Listen    string `json:"listen"`     // "127.0.0.1:7863"（缺省只绑回环）
 	APIKey    string `json:"api_key"`    // 空 = 不鉴权
 	AuthDir   string `json:"auth_dir"`   // ./auths
 	StateFile string `json:"state_file"` // ./data/state.json
@@ -282,7 +282,9 @@ type Config struct {
 // Default 默认配置。
 func Default() *Config {
 	c := &Config{
-		Listen:    ":7863",
+		// 缺省只绑回环：网关 + 面板 + 弱 api_key 暴露公网是最危险的组合。对外先过反代，
+		// 确需直连显式写 0.0.0.0:7863；Docker 镜像以 WB2A_LISTEN=0.0.0.0:7863 放开。
+		Listen:    "127.0.0.1:7863",
 		APIKey:    "",
 		AuthDir:   "./auths",
 		StateFile: "./data/state.json",

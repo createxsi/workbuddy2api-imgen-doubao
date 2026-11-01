@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -30,6 +31,7 @@ import (
 	"github.com/linguo2625469/workbuddy2api-panel/internal/updater"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 	"github.com/linguo2625469/workbuddy2api-panel/internal/usage"
+	"strings"
 )
 
 // appVersion 网关版本（fork 版：面板 + 任务体系），透出到 /panel/api/overview。
@@ -408,6 +410,9 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
+	if warn := insecureKeyWarning(cfg.Listen, cfg.APIKey); warn != "" {
+		log.Printf("WARN: %s", warn)
+	}
 	log.Printf("workbuddy2api listening on %s (api_key=%v)，管理面板 http://127.0.0.1%s/panel/", cfg.Listen, cfg.APIKey != "", panelListenPath(cfg.Listen))
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("http: %v", err)
@@ -456,6 +461,26 @@ func warmModelRates(ctx context.Context, up *upstream.Client, p *pool.Pool) {
 			}
 		}
 	}
+}
+
+// insecureKeyWarning api_key 为空（不鉴权）或样例占位符 test_key，且监听非回环地址时
+// 返回启动告警文本；安全状态返回空串。不阻塞启动。
+func insecureKeyWarning(listen, apiKey string) string {
+	if apiKey != "" && apiKey != "test_key" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(listen)
+	if err != nil {
+		host = listen
+	}
+	if host == "127.0.0.1" || host == "::1" || strings.EqualFold(host, "localhost") {
+		return ""
+	}
+	what := "为空（网关与面板完全不鉴权）"
+	if apiKey != "" {
+		what = "为样例占位符 test_key"
+	}
+	return fmt.Sprintf("api_key %s，且监听 %s 非回环地址——对外无有效鉴权，请尽快修改 api_key", what, listen)
 }
 
 // panelListenPath 从 listen 地址提取 ":port" 形式，用于启动日志拼面板 URL

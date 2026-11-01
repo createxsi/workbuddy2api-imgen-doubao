@@ -230,6 +230,8 @@ flowchart LR
 
 ## 快速开始
 
+> ⚠️ **监听地址默认改为 `127.0.0.1:7863`**：config.json 未写 `listen` 的二进制部署，升级后只能本机访问；需外部访问请显式写 `"listen": "0.0.0.0:7863"`（并设好 `api_key`，建议前置反代）。Docker 镜像 / compose 已用 `WB2A_LISTEN=0.0.0.0:7863` 放开，自建镜像或自写 `docker run` 请同样加上该环境变量。已写 `listen` 的配置不受影响。
+
 ### 环境要求
 
 - **Docker + Docker Compose**（服务端部署方式，镜像内已含低权限用户与全部工具脚本）——或
@@ -251,7 +253,7 @@ mkdir -p auths data && cp config.example.json config.json
 
 # 2. 拉取并运行
 docker run -d --name workbuddy2api \
-  -p 7863:7863 -e TZ=Asia/Shanghai \
+  -p 7863:7863 -e TZ=Asia/Shanghai -e WB2A_LISTEN=0.0.0.0:7863 \
   -v ./auths:/app/auths -v ./data:/app/data -v ./config.json:/app/config.json \
   ghcr.io/createxsi/workbuddy2api-imgen:latest
 
@@ -386,7 +388,7 @@ Claude Code 接入：`ANTHROPIC_BASE_URL=http://localhost:7863`（指到网关�
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
-| `listen` | `:7863` | HTTP 监听地址 |
+| `listen` | `127.0.0.1:7863` | HTTP 监听地址。缺省只绑回环；需对外直连写 `0.0.0.0:7863`（建议前置反代）。镜像 / compose 已用 `WB2A_LISTEN=0.0.0.0:7863` 放开 |
 | `api_key` | 空 | 网关鉴权密钥；**空 = 不鉴权直接放行**（公网必须设置） |
 | `auth_dir` | `./auths` | 账号凭证目录 |
 | `state_file` | `./data/state.json` | 账号池状态持久化文件 |
@@ -884,7 +886,7 @@ python3 scripts/probe_max_tokens.py   --base http://127.0.0.1:7863/v1 --key sk-x
 
 ### 2. 网络暴露与日志敏感度
 
-- 默认监听 `:7863`，compose 暴露 `0.0.0.0:7863`，**无内置 TLS**；公网部署必须设置 `api_key`，建议前置反代 / 内网
+- 默认只监听 `127.0.0.1:7863`；Docker 镜像与 compose 以 `WB2A_LISTEN=0.0.0.0:7863` 在容器内放开。**无内置 TLS**；对外部署必须设置 `api_key`，建议前置反代 / 内网。`api_key` 为空或为 `test_key` 且监听非回环地址时，启动日志打印告警
 - 请求日志字段：序号 / 模型 / 模式 / 状态码 / **uid 前 8 位** / TTFB / token 数——**不含** `accessToken` / `refreshToken` / `api_key` 明文（不读取 `Authorization` 头）
 - 日志写 **stdout / stderr**（容器内进入 `docker logs`），代码无任何落盘日志文件
 
