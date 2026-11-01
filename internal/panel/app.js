@@ -1243,6 +1243,8 @@ const CFG_MAP = {
   session_sticky_enabled: ['session_sticky', 'enabled'],
   request_client_info: ['logging', 'request_client_info'],
   models_hidden: ['models', 'hidden'], models_aliases: ['models', 'aliases'], models_fallback: ['models', 'fallback'],
+  cn_chat_base: ['cn', 'chat_base'], cn_billing_base: ['cn', 'billing_base'],
+  global_chat_base: ['global', 'chat_base'], global_billing_base: ['global', 'billing_base'],
 };
 // 列表型文本字段：空串 = 显式清空（发空数组），否则删不掉最后一个条目。
 const LIST_CFG = { models_hidden: /[,，\s]+/, models_aliases: /[,，]+/, models_fallback: /[,，]+/ };
@@ -1257,7 +1259,7 @@ const LIST_CFG = { models_hidden: /[,，\s]+/, models_aliases: /[,，]+/, models
  * 刻意不含 api_key：清空它 = 关闭整个鉴权，误触代价是网关变成无鉴权公开服务。
  * 该字段（以及提示文案"留空 = 不鉴权"与现状不符的问题）单独处理。
  */
-const CLEARABLE_CFG = new Set(['user_agent', 'prompt_file']);
+const CLEARABLE_CFG = new Set(['user_agent', 'prompt_file', 'cn_chat_base', 'cn_billing_base', 'global_chat_base', 'global_billing_base']);
 
 function dig(obj, path) { return path.reduce((o, k) => (o == null ? undefined : o[k]), obj); }
 function put(obj, path, val) {

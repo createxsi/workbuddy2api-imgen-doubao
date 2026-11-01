@@ -50,7 +50,8 @@
     "billing_base": ""
   },
   "cn": {
-    "chat_base": ""
+    "chat_base": "",
+    "billing_base": ""
   },
   "upstream": {
     "timeout_seconds": 120,

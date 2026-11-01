@@ -44,3 +44,22 @@ func TestCNChatBaseRequiresRestart(t *testing.T) {
 		t.Fatal("cn.chat_base missing from restart-required fields")
 	}
 }
+
+// cn.billing_base 覆盖 CN billing 域；空保留内置默认 www.workbuddy.cn。
+func TestCNBillingBase(t *testing.T) {
+	up := upstream.New()
+	if up.BillingBaseCN != "https://www.workbuddy.cn" {
+		t.Fatalf("默认 BillingBaseCN=%q", up.BillingBaseCN)
+	}
+	cfg, err := ParseConfig([]byte(`{"cn":{"billing_base":"https://www.codebuddy.cn"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	applyCNChatBase(up, cfg)
+	if up.BillingBaseCN != "https://www.codebuddy.cn" {
+		t.Fatalf("BillingBaseCN=%q want override", up.BillingBaseCN)
+	}
+	if !slices.Contains(restartRequiredFields(Default()), "cn.billing_base") {
+		t.Fatal("cn.billing_base 应提示重启")
+	}
+}

@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-const billingBaseCN = "https://www.codebuddy.cn"
+const billingBaseCN = "https://www.workbuddy.cn"
 
 // billingBaseGlobal 国际版计费域。global 账号打 CN 域会得到 401：
 // www.codebuddy.cn 不认 workbuddy.ai 的 token（实测 401，workbuddy.ai 同 token 为 code=0）。

@@ -821,8 +821,10 @@ func New() *Client {
 		ChatHTTP: &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
 		// ChatBaseCN 取官方桌面端 endpoint www.workbuddy.cn；copilot.tencent.com 是官方
 		// 网络故障切换里的备选入口（且对部分海外出口握手复位）。cn.chat_base 可覆盖回退。
-		ChatBaseCN:    "https://www.workbuddy.cn",
-		BillingBaseCN: "https://www.codebuddy.cn",
+		ChatBaseCN: "https://www.workbuddy.cn",
+		// BillingBaseCN 桌面端真机 CN 全部 billing / growth / 签到都打 www.workbuddy.cn；
+		// cn.billing_base 可退回 https://www.codebuddy.cn。
+		BillingBaseCN: "https://www.workbuddy.cn",
 		WebBaseCN:     "https://www.workbuddy.cn",
 		// GlobalEnabled 缺省 true（与 config global.enabled 缺省 true 一致；纯 CN 部署行为不变：
 		// CN 账号恒判 cn，global base 只在 realm=global 的账号上被使用）。

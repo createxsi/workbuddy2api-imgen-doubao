@@ -147,6 +147,10 @@ type Config struct {
 		// https://www.workbuddy.cn（官方桌面端 endpoint）。需要回退旧入口时填
 		// https://copilot.tencent.com（官方备选入口，对部分海外出口握手复位）。
 		ChatBase string `json:"chat_base"`
+		// BillingBase 国内版 billing / growth / 签到 / 余额上游 base 覆盖；空 = 内置默认
+		// https://www.workbuddy.cn（桌面端真机全部 billing 族都打该域）。需退回旧口径时填
+		// https://www.codebuddy.cn。
+		BillingBase string `json:"billing_base"`
 	} `json:"cn"`
 
 	Upstream struct {

@@ -763,9 +763,9 @@ http://127.0.0.1:7863/panel/
 
 上游接口均为 CodeBuddy 官方 CLI / 插件使用的**非公开 / 逆向接口**，未见公开 API 文档；路径及 Host 以代码内常量为准（见文末出处表）。两类 base：
 
-- **`www.workbuddy.cn`**（默认，可用 `cn.chat_base` 改回 `copilot.tencent.com`）：聊天补全（SSE）、token 刷新、模型列表、growth 域（旅行 / streak）
+- **`www.workbuddy.cn`**（默认，可用 `cn.chat_base` 改回 `copilot.tencent.com`）：聊天补全（SSE）、token 刷新、模型列表、growth 域（旅行 / streak）、活跃上报
+- **`www.workbuddy.cn`**（billing，默认，可用 `cn.billing_base` 退回 `www.codebuddy.cn`）：每日签到、余额查询
 - **`copilot.tencent.com`**：设备码登录（OAuth）
-- **`www.codebuddy.cn`**：每日签到、余额查询、活跃上报
 
 | 相对路径（绝对路径见出处表） | 方法 | 用途 |
 |---|---|---|

@@ -989,6 +989,26 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
         </div>
 
         <div class="box">
+          <header><h3>上游域名（国内版 / 国际版）</h3></header>
+          <div class="pad">
+            <div class="grid2">
+              <label class="fld"><span class="lb">国内版 chat base</span>
+                <input name="cn_chat_base" placeholder="默认 https://www.workbuddy.cn">
+                <span class="hint">对话 / 模型目录 / 刷新；备选 https://copilot.tencent.com；需重启</span></label>
+              <label class="fld"><span class="lb">国内版 billing base</span>
+                <input name="cn_billing_base" placeholder="默认 https://www.workbuddy.cn">
+                <span class="hint">签到 / 余额；旧口径 https://www.codebuddy.cn；需重启</span></label>
+              <label class="fld"><span class="lb">国际版 chat base</span>
+                <input name="global_chat_base" placeholder="默认 https://www.workbuddy.ai">
+                <span class="hint">需重启</span></label>
+              <label class="fld"><span class="lb">国际版 billing base</span>
+                <input name="global_billing_base" placeholder="默认 https://www.workbuddy.ai">
+                <span class="hint">需重启</span></label>
+            </div>
+          </div>
+        </div>
+
+        <div class="box">
           <header><h3>版本与更新</h3><span class="grow"></span><span class="note" id="updateNote" role="status">检查中…</span></header>
           <div class="pad">
             <div class="grid2">
