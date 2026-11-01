@@ -890,6 +890,7 @@ func (c *Client) chatBase(a *auth.Auth) string {
 // prepareBody 组装出站请求体（脱敏开关由 Client.SanitizeFingerprints 控制）。
 // realm 为账号 Realm()（cn/global），供 efforts 缓存分桶（跨域 effort 集合不互相污染）。
 func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []byte {
+	body = prepareKimiTools(body, realm)
 	efforts, defs := c.effortsSnapshot(realm), c.defaultEffortsSnapshot(realm)
 	if realmKey(realm) == "global" {
 		// global 域降级源 = 远端探测桶（权威）∪ 产品静态兜底表。当前探测桶为空时也按
