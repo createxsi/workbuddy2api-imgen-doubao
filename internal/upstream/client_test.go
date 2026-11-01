@@ -711,3 +711,15 @@ func TestClassifyUpstreamBusy(t *testing.T) {
 		}
 	}
 }
+
+func TestParseQueueRetryAfter(t *testing.T) {
+	if d, ok := parseQueueRetryAfter([]byte(`{"code":6020,"data":{"retry_after":40}}`)); !ok || d != 40*time.Second {
+		t.Fatalf("got %v %v", d, ok)
+	}
+	if _, ok := parseQueueRetryAfter([]byte(`{"code":6021,"msg":"queue.full.title","requestId":"6020"}`)); ok {
+		t.Fatal("无 data.retry_after 不应解析")
+	}
+	if d, _ := parseQueueRetryAfter([]byte(`{"data":{"retry_after":999999}}`)); d != retryAfterSanity {
+		t.Fatalf("应封顶: %v", d)
+	}
+}

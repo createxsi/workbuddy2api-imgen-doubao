@@ -45,7 +45,7 @@ const (
 	ErrPromptTooLong                 // 11115「prompt is too long」→ 请求级错误（上下文超限是请求的问题非账号的问题）：不罚号、不轮转，末端透传原文
 	ErrImageInvalid                  // 图片请求格式/数据无效 → 请求级错误：不罚号、不轮转，末端透传原文
 	ErrClient                        // 其他 4xx / 业务错误
-	ErrUpstreamBusy                  // 6020 queue.waiting / 6021 queue.full 渠道级排队 → 上游容量信号：不罚号、不轮转，末端 503 透传原文
+	ErrUpstreamBusy                  // 6020 queue.waiting / 6021 queue.full 渠道级排队 → 不罚号；有等待口径不换号，末端 429 + Retry-After
 )
 
 func (k ErrKind) String() string {
@@ -422,6 +422,24 @@ var retryAfterHeaderCandidates = []string{"Retry-After", "Retry-After-Ms", "X-Ra
 // retryAfterSanity 解析结果的上限（超过视为上游异常值丢弃，回落本地计算），
 // 与 pool 的 softRateMax 默认 2h 同量级。
 const retryAfterSanity = 2 * time.Hour
+
+// parseQueueRetryAfter 从 6020/6021 排队响应 body 抽 data.retry_after（整数秒），
+// 超过 retryAfterSanity 封顶；解析不到返回 false。
+func parseQueueRetryAfter(body []byte) (time.Duration, bool) {
+	var env struct {
+		Data struct {
+			RetryAfter int64 `json:"retry_after"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil || env.Data.RetryAfter <= 0 {
+		return 0, false
+	}
+	d := time.Duration(env.Data.RetryAfter) * time.Second
+	if d > retryAfterSanity {
+		d = retryAfterSanity
+	}
+	return d, true
+}
 
 // ParseRetryAfter 从限流/拦截响应头解析上游明示的等待时长：
 // 依次尝试 Retry-After（整数秒）→ retry-after-ms（整数毫秒）→
@@ -1256,6 +1274,11 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 			ue := &Error{Kind: kind, Status: resp.StatusCode, Msg: truncate(string(raw), 200)}
 			if d, ok := ParseRetryAfter(resp.Header); ok {
 				ue.RetryAfter = d
+			} else if kind == ErrUpstreamBusy {
+				// 排队信封的等待口径在 body（data.retry_after），头里没有。
+				if d, ok := parseQueueRetryAfter(raw); ok {
+					ue.RetryAfter = d
+				}
 			}
 			return nil, resp.StatusCode, raw, ue
 		}

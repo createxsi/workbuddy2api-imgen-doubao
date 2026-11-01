@@ -91,19 +91,47 @@ func TestRefreshRejected(t *testing.T) {
 	}
 }
 
-// 6020 排队：503 + Retry-After，不罚号。
+// 6020 无等待口径：换号重试，终态 429 + Retry-After 5，不罚号。
 func TestChatUpstreamBusyNoPenalty(t *testing.T) {
+	calls := 0
 	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
-		return 429, `{"code":6020,"msg":"queue.waiting.title"}`, false
+		calls++
+		return 429, `{"code":6021,"msg":"queue.full.title"}`, false
 	})
-	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999})
-	h := NewHandler(Config{Pool: p, Upstream: up})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "u2", AccessToken: "at2", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, MaxRotate: 2})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
-	if rec.Code != 503 || rec.Header().Get("Retry-After") == "" {
+	if rec.Code != 429 || rec.Header().Get("Retry-After") != "5" || !strings.Contains(rec.Body.String(), "upstream_busy") {
 		t.Fatalf("code=%d retry-after=%q body=%s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
 	}
-	if st, _ := p.Status("u1"); st.Cooling || st.Disabled {
-		t.Fatalf("6020 must not penalize account: %+v", st)
+	if calls != 2 {
+		t.Errorf("calls=%d want 2（无口径应换号）", calls)
+	}
+	for _, uid := range []string{"u1", "u2"} {
+		if st, _ := p.Status(uid); st.Cooling || st.Disabled {
+			t.Fatalf("排队不应罚号: %+v", st)
+		}
+	}
+}
+
+// 6020 带 data.retry_after：不换号，Retry-After 取 body 口径。
+func TestChatQueueWaitingRetryAfterFromBody(t *testing.T) {
+	calls := 0
+	up := newFakeUpstream(t, func(authz string) (int, string, bool) {
+		calls++
+		return 429, `{"code":6020,"msg":"queue.waiting.title","data":{"queue_position":2502,"retry_after":40}}`, false
+	})
+	p := testPoolWith(&auth.Auth{UID: "u1", AccessToken: "at1", ExpiresAt: 9999999999},
+		&auth.Auth{UID: "u2", AccessToken: "at2", ExpiresAt: 9999999999})
+	h := NewHandler(Config{Pool: p, Upstream: up, MaxRotate: 3})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"glm-5.2","messages":[]}`)))
+	if rec.Code != 429 || rec.Header().Get("Retry-After") != "40" {
+		t.Fatalf("code=%d retry-after=%q body=%s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	if calls != 1 {
+		t.Errorf("calls=%d want 1（有口径不换号）", calls)
 	}
 }

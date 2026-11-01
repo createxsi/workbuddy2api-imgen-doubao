@@ -1015,26 +1015,25 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				st.outcome = reqlog.OutcomeHTTPError
 				return
 			}
-			// 6020/6021 渠道级排队：不罚号不轮转，立即 503 透传上游原文。集群排队时
-			// 换任何账号都撞同一堵墙，轮转只会把无效请求放大。Retry-After 优先上游头，
-			// 缺失按 5s 提示。
+			// 6020/6021 渠道级排队：不罚号。上游给了等待口径（6020 data.retry_after）时
+			// 换号只会把同一份排队请求多发几次，直接结束轮转；6021 无口径是间歇空窗，
+			// 换号重试。终态由末端映射为 429 + Retry-After（上游原本就是 429，回 503
+			// 会让按 Retry-After 重试的客户端直接中断任务）。
 			if kind == upstream.ErrUpstreamBusy {
 				h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
 				fail(acct.UID)
-				msg := string(respBody)
-				if strings.TrimSpace(msg) == "" {
-					msg = "upstream queue is busy; retry after a short wait"
+				busyErr := &upstream.Error{Kind: kind, Status: status, Msg: string(respBody)}
+				if uerr != nil {
+					busyErr.RetryAfter = uerr.RetryAfter
 				}
-				retryAfter := "5"
-				if uerr != nil && int64(uerr.RetryAfter.Seconds()) > 0 {
-					retryAfter = strconv.FormatInt(int64(uerr.RetryAfter.Seconds()), 10)
+				lastErr = busyErr
+				if busyErr.RetryAfter > 0 {
+					break
 				}
-				w.Header().Set("Retry-After", retryAfter)
-				writeOpenAIErrorHint(w, http.StatusServiceUnavailable, "upstream_busy", msg,
-					h.hintOf(upstream.ErrUpstreamBusy, string(respBody), bareModel, reqHasImage, uerr))
-				st.status = http.StatusServiceUnavailable
-				st.outcome = reqlog.OutcomeHTTPError
-				return
+				if !rotateBackoff(i, r.Context()) {
+					break
+				}
+				continue
 			}
 			// 图片格式/数据无效：立即透传上游原文回客户端，不罚号不轮转。
 			// 同一 body 换账号仍是同样的解析结果，轮转只会放大无效请求。
@@ -1288,6 +1287,15 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 				// 有上游原文时原文优先（下方统一）。
 				code = "waf_ip_blocked"
 				msg = "waf ip-level block: upstream firewall is blocking the gateway IP, rotation stopped; retry after the block window expires"
+			}
+		case upstream.ErrUpstreamBusy:
+			// 6020/6021 渠道排队：429 + Retry-After（上游口径优先，缺省 5s，封顶）。
+			status = http.StatusTooManyRequests
+			code = "upstream_busy"
+			msg = "upstream queue is busy; retry after a short wait"
+			retryAfterSec = 5
+			if secs := int(math.Ceil(ue.RetryAfter.Seconds())); secs > 0 {
+				retryAfterSec = min(secs, maxRetryAfterSec)
 			}
 		case upstream.ErrModelBlocked:
 			// 11102「该后端无此模型」：上游原文（下方统一透传）已经写清了原因，但
@@ -1686,7 +1694,7 @@ func (h *Handler) applyErrorPolicy(uid string, kind upstream.ErrKind, body, mode
 		// 得到相同解析错误）。零动作，chatCompletions 已 fail-fast 透传。
 	case upstream.ErrUpstreamBusy:
 		// 6020/6021 渠道级排队：账号健康，零动作（不冷却/不熔断/不喂连败）。
-		// chatCompletions 已 fail-fast 503 透传。
+		// chatCompletions 按是否有等待口径决定轮转，终态 429 + Retry-After。
 	case upstream.ErrBadParams:
 		// 请求体解析失败（400 + Unmarshal chat params failed / 11101）：发给上游的 body
 		// 有问题（网关侧不再截断，均为客户端畸形 JSON）。换了账号照样 400，
