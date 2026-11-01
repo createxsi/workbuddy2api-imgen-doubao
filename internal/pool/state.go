@@ -39,6 +39,7 @@ func (p *Pool) NoteSessionDead(uid string) bool {
 	}
 	e.sessionDeadFails++
 	if e.sessionDeadFails < sessionDeadThreshold {
+		p.dirty.Store(true) // 中间计数落盘：重启不丢「离禁用还差几次」
 		return false
 	}
 	e.sessionDeadFails = 0
@@ -51,8 +52,9 @@ func (p *Pool) NoteSessionDead(uid string) bool {
 func (p *Pool) ClearSessionDead(uid string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if e, ok := p.byUID[uid]; ok {
+	if e, ok := p.byUID[uid]; ok && e.sessionDeadFails != 0 {
 		e.sessionDeadFails = 0
+		p.dirty.Store(true) // 清零落盘：否则重启复活旧计数，刚证明存活的号下次一失败就被禁
 	}
 }
 

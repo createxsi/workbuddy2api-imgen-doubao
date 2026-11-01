@@ -160,3 +160,27 @@ func TestStatusDisabledReasonClearedByRevive(t *testing.T) {
 		t.Errorf("revive 后 reason=%q want 空", st.Reason)
 	}
 }
+
+// 中间计数与清零都落盘：重启后既保留进度，也不残留已清零的旧计数。
+func TestSessionDeadCountPersists(t *testing.T) {
+	fp := filepath.Join(t.TempDir(), "state.json")
+	p := New(fp)
+	p.Add(&auth.Auth{UID: "u1"})
+	p.NoteSessionDead("u1")
+	p.NoteSessionDead("u1")
+	p.Flush()
+
+	p2 := New(fp)
+	p2.Add(&auth.Auth{UID: "u1"})
+	if n := p2.byUID["u1"].sessionDeadFails; n != 2 {
+		t.Fatalf("重启后应保留中间计数 2, got %d", n)
+	}
+	p2.ClearSessionDead("u1")
+	p2.Flush()
+
+	p3 := New(fp)
+	p3.Add(&auth.Auth{UID: "u1"})
+	if n := p3.byUID["u1"].sessionDeadFails; n != 0 {
+		t.Fatalf("清零应落盘, got %d", n)
+	}
+}
