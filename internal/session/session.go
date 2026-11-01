@@ -205,8 +205,16 @@ func (r *Router) ResolveForModel(key, model string) (string, bool) {
 }
 
 // touch 滚动 lastActive 并异步镜像（只在快路径命中时写最后一次）。
+//
+// CAS：写锁内先核对绑定仍是 uid 才滚动。快路径 RUnlock 到加写锁的窗口里，失败路径
+// Unbind、成功路径 Bind（粘性跟随）、慢路径重分配都可能已改写绑定；无条件回写会复活
+// 刚解绑的失败号、冲掉粘性跟随，镜像进 Redis 后重启也恢复成错误绑定。
 func (r *Router) touch(key, uid string, now time.Time) {
 	r.mu.Lock()
+	if e, ok := r.entries[key]; !ok || e.uid != uid {
+		r.mu.Unlock()
+		return
+	}
 	r.entries[key] = entry{uid: uid, lastActive: now}
 	r.mu.Unlock()
 	r.cfg.Store.SetBind(key, uid, r.cfg.TTL)
