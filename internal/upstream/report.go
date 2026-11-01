@@ -196,7 +196,7 @@ func (c *Client) ReportChatActivityModel(a *auth.Auth, conversationID, requestID
 	if err != nil {
 		return err
 	}
-	setDesktopReportHeaders(req, a, c.chatHost(a))
+	c.setDesktopReportHeaders(req, a, c.chatHost(a))
 	_, err = c.doJSON(req)
 	return err
 }

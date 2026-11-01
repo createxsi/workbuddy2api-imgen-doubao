@@ -788,6 +788,10 @@ type Client struct {
 	// DeviceTokenFile 设备 token 文件路径兜底（宿主落盘的桌面端 token，5 分钟读取缓存）。
 	DeviceTokenFile string
 
+	// WireCompression 出站压缩口径（config upstream.wire_compression，New 缺省开）：
+	// 全链路声明真机 Accept-Encoding + chat 请求体 gzip，见 encoding.go。
+	WireCompression bool
+
 	ChatBaseCN    string
 	BillingBaseCN string
 	// WebBaseCN 官网（workbuddy.cn）域：部分「任务领奖」类接口只在此域提供
@@ -816,10 +820,12 @@ type Client struct {
 // TLS 握手超时 / 短 keepalive 探测 / 失败清池，参数见 transport.go——吸收上游
 // kongjianguan 4 连击实测经验）。
 func New() *Client {
-	tr := newTransport()
+	// decodeTransport：显式声明 Accept-Encoding 后由它流式解压（见 encoding.go）。
+	tr := &decodeTransport{base: newTransport()}
 	c := &Client{
-		HTTP:     &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP: &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		HTTP:            &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		ChatHTTP:        &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		WireCompression: true,
 		// ChatBaseCN 取官方桌面端 endpoint www.workbuddy.cn；copilot.tencent.com 是官方
 		// 网络故障切换里的备选入口（且对部分海外出口握手复位）。cn.chat_base 可覆盖回退。
 		ChatBaseCN: "https://www.workbuddy.cn",
@@ -1001,6 +1007,11 @@ func (c *Client) doJSON(req *http.Request) (json.RawMessage, error) {
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
+		return nil, fmt.Errorf("read body: %w", err)
+	}
+	// 必须在 Classify / Unmarshal 之前解压（未经 decodeTransport 的 client 兜底）；
+	// 解压失败按传输层错误返回，不进 Classify、不罚号。
+	if raw, err = decodeResponseBody(resp.Header, raw); err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 	if resp.StatusCode >= 400 {
@@ -1244,11 +1255,21 @@ func (c *Client) ChatStreamContext(ctx context.Context, a *auth.Auth, body []byt
 	// 尾部不可达 cancel() 是潜伏 nil-panic，已删；chatPaths 恒非空由构造保证）。
 	for _, path := range c.chatPaths(a) {
 		endpoint := c.chatBase(a) + path
-		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(prepared))
+		// 真机 chat 请求体是 gzip（Content-Encoding: gzip）；小 body 不压。
+		outBody, gzipped := prepared, false
+		if c.WireCompression && len(prepared) >= gzipMinChatBody {
+			if z, zerr := gzipBody(prepared); zerr == nil {
+				outBody, gzipped = z, true
+			}
+		}
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(outBody))
 		if err != nil {
 			return nil, 0, nil, err
 		}
 		c.ChatHeaders(req, a, clientIP, meta)
+		if gzipped {
+			req.Header.Set("Content-Encoding", "gzip")
+		}
 		// 从调用方 ctx 派生：保留取消传播（父 ctx 取消 → 本 ctx 取消），
 		// 同时 monitorBody.Close 仍能独立 cancel 本分支（空闲掐流）。
 		reqCtx, cancel := context.WithCancel(ctx)
@@ -1902,6 +1923,7 @@ func (c *Client) fetchV3ConfigModelMap(a *auth.Auth, ua string) (map[string]Mode
 	req.Header.Set("X-Domain", v3ConfigDomain(a, c.chatBase(a)))
 	req.Header.Set("X-Product", "SaaS")
 	req.Header.Set("X-Request-ID", session.NewTraceID())
+	c.setAcceptEncoding(req)
 	if ua == "" {
 		ua = codeBuddyIDEUA
 	}

@@ -419,7 +419,8 @@ Claude Code 接入：`ANTHROPIC_BASE_URL=http://localhost:7863`（指到网关�
 | `upstream.timeout_seconds` | `120` | 短 RPC（刷新 / 签到 / 余额 / 模型列表）总时长上限 |
 | `upstream.header_timeout_seconds` | 回落 `timeout_seconds` | 聊天首字节前（响应头）上限 |
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流） |
-| `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 现状 `CLI/2.63.2 CodeBuddy/2.63.2`）。官网「使用端」列按出站 UA 服务端归因；官方 WorkBuddy 桌面 UA 为 `WorkBuddy/<version>`，需要时可配 |
+| `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 桌面端默认 UA）。官网「使用端」列按出站 UA 服务端归因；官方 WorkBuddy 桌面 UA 为 `WorkBuddy/<version>`，需要时可配 |
+| `upstream.wire_compression` | `true` | 出站压缩对齐桌面端：全链路声明 `Accept-Encoding: gzip, compress, deflate, br`（网关自行流式解压，解压失败按传输错误处理、不罚号），chat 请求体 ≥1KB 时 gzip。`false` 回到 Go 默认。需重启 |
 | `upstream.dump_dir` | 空 | 诊断用：非空时每次 chat 把出站请求体 + 上游原始响应落到该目录（单文件封顶 8 MB，写盘失败不影响请求）。正文含用户提示词，用完即关。也可用环境变量 `WB2A_DUMP_UPSTREAM`；需重启 |
 | `upstream.dump_max_bytes` | `0` | 落盘文件里出站请求体片段上限，0 = 256 KB；长会话看不到 tools 时调大 |
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |

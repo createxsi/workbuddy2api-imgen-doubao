@@ -78,7 +78,7 @@ func (c *Client) desktopHost(a *auth.Auth) string {
 
 // setDesktopReportHeaders 桌面端 /v2/report 头族（真机 11 头，Node 形态）：无 Origin /
 // Referer / X-Requested-With / x-client-platform。X-Request-ID 为纯随机 32 hex。
-func setDesktopReportHeaders(req *http.Request, a *auth.Auth, host string) {
+func (c *Client) setDesktopReportHeaders(req *http.Request, a *auth.Auth, host string) {
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
 	req.Header.Set("X-Request-ID", session.NewTraceID())
@@ -91,6 +91,7 @@ func setDesktopReportHeaders(req *http.Request, a *auth.Auth, host string) {
 		req.Header.Set("X-User-Id", a.UID)
 	}
 	req.Header.Set("X-Domain", host)
+	c.setAcceptEncoding(req)
 }
 
 // desktopBase 桌面端 /v2/report 与 user-asset 走 chatBase（copilot.tencent.com）。
@@ -169,7 +170,7 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	if err != nil {
 		return err
 	}
-	setDesktopReportHeaders(req, a, c.desktopHost(a))
+	c.setDesktopReportHeaders(req, a, c.desktopHost(a))
 	_, err = c.doJSON(req)
 	return err
 }
@@ -330,7 +331,7 @@ func (c *Client) ReportWebEvent(a *auth.Auth, eventCode, pageURL, elementID, ele
 	if err != nil {
 		return err
 	}
-	setDesktopReportHeaders(req, a, hostOf(base, "www.workbuddy.cn"))
+	c.setDesktopReportHeaders(req, a, hostOf(base, "www.workbuddy.cn"))
 	_, err = c.doJSON(req)
 	return err
 }

@@ -525,7 +525,7 @@ func TestNewChatClientNoTotalTimeoutAndSharedTransport(t *testing.T) {
 	if c.ChatHTTP.Transport != c.HTTP.Transport {
 		t.Errorf("ChatHTTP and HTTP must share the same *http.Transport")
 	}
-	htr, ok := c.ChatHTTP.Transport.(*http.Transport)
+	htr, ok := HTTPTransport(c.ChatHTTP.Transport)
 	if !ok {
 		t.Fatalf("Transport type=%T", c.ChatHTTP.Transport)
 	}

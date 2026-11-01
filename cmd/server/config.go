@@ -164,6 +164,10 @@ type Config struct {
 		// 全部出站请求生效：chat/refresh/checkin/balance/report/travel/FetchModels。
 		// 默认值已对齐官方 WorkBuddy 桌面形态（三段式），用户仍可配完全自定义值改写。
 		UserAgent string `json:"user_agent"`
+		// WireCompression 出站压缩口径（桌面端真机）：全链路声明
+		// Accept-Encoding: gzip, compress, deflate, br（响应由网关自行解压）+ chat 请求体
+		// ≥1KB 时 gzip。缺省 true；false 回到 Go 默认（仅 gzip 声明、明文请求体）。需重启。
+		WireCompression bool `json:"wire_compression"`
 		// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` 与归属头
 		// X-IDE-Version）。空 = 按 realm 取内置默认（CN 5.9.3 / global 5.9.4）。
 		ClientVersion string `json:"client_version"`
@@ -313,6 +317,7 @@ func Default() *Config {
 	c.Schedule.TravelEnabled = true
 	c.Schedule.ActivityEnabled = true
 	c.Schedule.KeepaliveEnabled = true
+	c.Upstream.WireCompression = true
 	c.Schedule.BlackcatEnabled = true
 	c.Schedule.BalanceRefreshEnabled = true
 	c.Schedule.BalanceRefreshMinutes = 5

@@ -160,6 +160,7 @@ func (c *Client) CommonHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("User-Agent", c.rpcUserAgent(a))
 	req.Header.Set("X-Product", "SaaS")
+	c.setAcceptEncoding(req)
 }
 
 // chatFamilyHeaders chat / 生图（SDK 族）在 RPC 公共头之上的差异：SDK 族 UA、
@@ -206,8 +207,8 @@ type ChatMeta struct {
 func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, meta ChatMeta) {
 	c.CommonHeaders(req, a)
 	// SDK 族差异头（UA / Accept / XRW / X-CodeBuddy-Request）。Accept 与官方 chat
-	// 一致只发 application/json，照样收 SSE 流。Accept-Encoding 刻意不设：显式设置会
-	// 关闭 net/http 透明解压，网关没有 brotli 解码器。
+	// 一致只发 application/json，照样收 SSE 流。Accept-Encoding 由 CommonHeaders 按
+	// WireCompression 声明，SSE 由 decodeTransport 流式解压。
 	c.chatFamilyHeaders(req, a)
 	// AccessToken 加锁快照：keepalive 定时刷新会在 a.mu 内改写它，锁外直读构成数据竞争
 	// （见 auth.AccessTokenValue 注释）。
@@ -513,6 +514,7 @@ func (c *Client) BillingHeaders(req *http.Request, a *auth.Auth) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Request-ID", session.NewTraceID())
+	c.setAcceptEncoding(req)
 	if c != nil && c.UserAgent != "" {
 		req.Header.Set("User-Agent", c.UserAgent)
 	} else if ua := c.billingUA(a); ua != "" {
