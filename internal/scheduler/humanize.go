@@ -1,5 +1,4 @@
-// humanize.go 分钟级周期任务的人味化：余额刷新不再按精确固定间隔整池齐射，
-// 夜猫子可收窄到积分最高的少数账号。
+// humanize.go 分钟级周期任务的人味化：余额刷新不再按精确固定间隔整池齐射。
 //
 // 小时级排程已有账号级摊开（spread.go）；余额刷新是分钟级 ticker，此前每轮间隔
 // 恒定、全账号同一秒并发——同一出口上最好认的时间形状。这里补两类随机性：
@@ -13,12 +12,9 @@ package scheduler
 import (
 	"encoding/binary"
 	"hash/fnv"
-	"sort"
 	"strconv"
 	"sync/atomic"
 	"time"
-
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
 )
 
 // MaxJitterPermill 周期抖动上限（千分比，500 = ±50%）。
@@ -72,17 +68,6 @@ func staggerDelay(window time.Duration, round uint64, uid string) time.Duration 
 	return time.Duration(jitterFrac("bal|"+strconv.FormatUint(round, 10)+"|"+uid) * float64(window))
 }
 
-// capByCredits 按积分降序取前 n 个（同分保持原顺序）。n<=0 或不超上限时原样返回；
-// 不改动入参切片的顺序。
-func capByCredits(list []pool.Status, n int) []pool.Status {
-	if n <= 0 || len(list) <= n {
-		return list
-	}
-	sorted := append([]pool.Status(nil), list...)
-	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Credits > sorted[j].Credits })
-	return sorted[:n]
-}
-
 // SetBalanceJitter 热改余额刷新抖动（千分比，钳到 0–500；0 = 关闭）。下一轮生效。
 func (s *Scheduler) SetBalanceJitter(permill int) {
 	s.balanceJitter.Store(int64(clampPermill(permill)))
@@ -90,17 +75,6 @@ func (s *Scheduler) SetBalanceJitter(permill int) {
 
 // BalanceJitterPermill 当前余额刷新抖动（千分比）。
 func (s *Scheduler) BalanceJitterPermill() int { return int(s.balanceJitter.Load()) }
-
-// SetNightAccountCap 热改夜猫子参与上限；<=0 = 不限。
-func (s *Scheduler) SetNightAccountCap(n int) {
-	if n < 0 {
-		n = 0
-	}
-	s.nightAccountCap.Store(int64(n))
-}
-
-// NightAccountCap 当前夜猫子参与上限（0 = 不限）。
-func (s *Scheduler) NightAccountCap() int { return int(s.nightAccountCap.Load()) }
 
 func clampPermill(v int) int {
 	if v < 0 {

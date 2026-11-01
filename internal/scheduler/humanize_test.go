@@ -1,18 +1,9 @@
 package scheduler
 
 import (
-	"net/http"
-	"net/http/httptest"
 	"strconv"
-	"strings"
-	"sync"
 	"testing"
 	"time"
-
-	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/cst"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/pool"
-	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 func TestJitterFracStableAndBounded(t *testing.T) {
@@ -94,81 +85,5 @@ func TestSetBalanceJitterClamps(t *testing.T) {
 	s.SetBalanceJitter(900)
 	if s.BalanceJitterPermill() != MaxJitterPermill {
 		t.Fatal("超上限应钳为 500")
-	}
-	s.SetNightAccountCap(-1)
-	if s.NightAccountCap() != 0 {
-		t.Fatal("负上限应视为不限")
-	}
-}
-
-func TestCapByCredits(t *testing.T) {
-	mk := func(uid string, c int64) pool.Status { return pool.Status{UID: uid, Credits: c} }
-	list := []pool.Status{mk("a", 3), mk("b", 9)}
-	if got := capByCredits(list, 0); len(got) != 2 {
-		t.Fatal("0 = 不限")
-	}
-	if got := capByCredits(list, 5); len(got) != 2 {
-		t.Fatal("不超上限原样返回")
-	}
-	list = []pool.Status{mk("a", 100), mk("b", 500), mk("c", 300), mk("d", 400), mk("e", 200)}
-	got := capByCredits(list, 2)
-	if len(got) != 2 || got[0].UID != "b" || got[1].UID != "d" {
-		t.Fatalf("want [b d], got %v", got)
-	}
-	if list[0].UID != "a" {
-		t.Fatal("不得改动入参顺序")
-	}
-}
-
-// TestBlackcatNightCap 夜猫子上限：只有积分最高的前 N 个合格账号发起上游调用；
-// 不合格账号（禁用）不占名额。
-func TestBlackcatNightCap(t *testing.T) {
-	restoreClock := nowForNightWindow
-	nowForNightWindow = func() time.Time { return time.Date(2026, 10, 7, 23, 30, 0, 0, cst.Loc) }
-	t.Cleanup(func() { nowForNightWindow = restoreClock })
-
-	var mu sync.Mutex
-	hit := map[string]bool{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/v2/activity/growth/tasks") {
-			mu.Lock()
-			hit[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")] = true
-			mu.Unlock()
-		}
-		w.Write([]byte(`{"code":0,"msg":"ok","data":{}}`))
-	}))
-	defer srv.Close()
-
-	p := pool.New("")
-	for _, uid := range []string{"u1", "u2", "u3", "u4"} {
-		p.Add(&auth.Auth{UID: uid, AccessToken: "at-" + uid, RefreshToken: "rt", ExpiresAt: 9999999999})
-	}
-	p.SetCredits("u1", 100, 1000)
-	p.SetCredits("u2", 900, 1000) // 积分最高但禁用：不占名额
-	p.SetCredits("u3", 500, 1000)
-	p.SetCredits("u4", 300, 1000)
-	p.Disable("u2", "manual")
-
-	up := &upstream.Client{HTTP: srv.Client(), ChatBaseCN: srv.URL, BillingBaseCN: srv.URL, WebBaseCN: srv.URL}
-	s := New(Config{Pool: p, Upstream: up})
-	s.SetNightAccountCap(2)
-	s.RunBlackcatNow()
-
-	snapshot := func() map[string]bool {
-		mu.Lock()
-		defer mu.Unlock()
-		out := hit
-		hit = map[string]bool{}
-		return out
-	}
-	if got := snapshot(); !got["at-u3"] || !got["at-u4"] || got["at-u1"] || got["at-u2"] {
-		t.Fatalf("want 只有 u3/u4 参加，got %v", got)
-	}
-
-	// 上限 0 = 全部合格账号参加（旧行为）。
-	s.SetNightAccountCap(0)
-	s.RunBlackcatNow()
-	if got := snapshot(); !got["at-u1"] || !got["at-u3"] || !got["at-u4"] || got["at-u2"] {
-		t.Fatalf("不限时应为全部合格账号，got %v", got)
 	}
 }

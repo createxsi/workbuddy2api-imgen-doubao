@@ -75,9 +75,8 @@ type Config struct {
 		TravelHours    []int `json:"travel_hours"`    // [9,21]
 		ActivityHours  []int `json:"activity_hours"`  // [10]
 		KeepaliveHours []int `json:"keepalive_hours"` // [22]
-		BlackcatHours  []int `json:"blackcat_hours"`  // [23] 夜猫子窗口（23:00–08:00 计数）
 		GrowthHours    []int `json:"growth_hours"`    // [1] 成长任务队列（Sequential 族每日零点解锁，01:00 自动扫描执行）
-		// CheckinEnabled/TravelEnabled/ActivityEnabled/KeepaliveEnabled/BlackcatEnabled 显式禁用开关（缺省 true）。
+		// CheckinEnabled/TravelEnabled/ActivityEnabled/KeepaliveEnabled 显式禁用开关（缺省 true）。
 		//
 		// 为什么用独立 bool 而不是空数组/哨兵值表意"禁用"：
 		//   - 空数组与 null 在老语义里已被"未配置 → 回落默认"占用，改判会静默翻转
@@ -90,7 +89,6 @@ type Config struct {
 		TravelEnabled    bool `json:"travel_enabled"`    // 缺省 true；false = 完全停猫猫旅行
 		ActivityEnabled  bool `json:"activity_enabled"`  // 缺省 true；false = 停活跃上报
 		KeepaliveEnabled bool `json:"keepalive_enabled"` // 缺省 true；false = 关 token 保活
-		BlackcatEnabled  bool `json:"blackcat_enabled"`  // 缺省 true；false = 关夜猫子
 		GrowthEnabled    bool `json:"growth_enabled"`    // 缺省 true；false = 关成长任务自动排程
 
 		// IncludeDisabledInTasks 让「保号类」定时任务（签到 / 活跃上报 / token 保活 /
@@ -109,7 +107,7 @@ type Config struct {
 		// **依旧不参与选号**：pool 选号侧的 disabled 过滤不受本开关影响。
 		IncludeDisabledInTasks bool `json:"include_disabled_in_tasks"`
 		// AccountSpreadMinutes 账号级摊开窗口：0 = 关闭（排程任务对全池连续执行）。
-		// >0 时排程触发的签到 / 旅行 / 活跃上报 / 保活 / 夜猫子把每个账号放在窗口内
+		// >0 时排程触发的签到 / 旅行 / 活跃上报 / 保活把每个账号放在窗口内
 		// 各自的偏移上（按 任务+账号+日期 哈希，当天固定），面板手动触发不受影响。上限 45。
 		AccountSpreadMinutes int `json:"account_spread_minutes"`
 		// AccountSpreadMinGapSeconds 同批两个账号的最小间隔（偏移撞车时把后者推开），0 = 只做随机。
@@ -124,9 +122,11 @@ type Config struct {
 		// 错峰起跑，不再整点齐射。面板手动刷新不受影响。例：5 分钟 + 200 → 间隔 4–6 分钟。
 		BalanceRefreshJitterPermill int `json:"balance_refresh_jitter_permill"`
 
-		// NightAccountCap 夜猫子参与上限：>0 时只让积分最高的前 N 个合格账号参加，
-		// 0 = 不限（缺省，全池参加）。其余白天任务不受影响。
-		NightAccountCap int `json:"night_account_cap"`
+		// 夜猫子（black_cat）已被上游下架，排程整条删除。以下三个旧键只为兼容老配置：
+		// 照常解析（类型不限，不校验）但完全忽略；面板保存时原样保留，不报错。
+		LegacyBlackcatHours   json.RawMessage `json:"blackcat_hours,omitempty"`
+		LegacyBlackcatEnabled json.RawMessage `json:"blackcat_enabled,omitempty"`
+		LegacyNightAccountCap json.RawMessage `json:"night_account_cap,omitempty"`
 	} `json:"schedule"`
 
 	Global struct {
@@ -315,7 +315,6 @@ func Default() *Config {
 	c.Schedule.TravelHours = []int{9, 21}
 	c.Schedule.ActivityHours = []int{10}
 	c.Schedule.KeepaliveHours = []int{22}
-	c.Schedule.BlackcatHours = []int{23}
 	c.Schedule.GrowthHours = []int{1}
 	// 开关「缺省 true」靠这几行实现：Load 先取 Default() 再 json.Unmarshal 覆盖，
 	// 键缺席（或为 null）时字段原样保留 true，只有显式 false 才关。
@@ -328,7 +327,6 @@ func Default() *Config {
 	c.Upstream.TLSFingerprint = "node"
 	c.Upstream.HeaderShape = true
 	c.Upstream.ConnPerAccount = true
-	c.Schedule.BlackcatEnabled = true
 	c.Schedule.BalanceRefreshEnabled = true
 	c.Schedule.BalanceRefreshMinutes = 5
 	c.Upstream.TimeoutSeconds = 120
@@ -524,11 +522,6 @@ func applyEnv(c *Config) {
 			c.Schedule.BalanceRefreshJitterPermill = n
 		}
 	}
-	if v := os.Getenv("WB2A_SCHEDULE_NIGHT_ACCOUNT_CAP"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			c.Schedule.NightAccountCap = n
-		}
-	}
 }
 
 func (c *Config) normalize() error {
@@ -672,9 +665,6 @@ func (c *Config) normalize() error {
 	if len(c.Schedule.KeepaliveHours) == 0 {
 		c.Schedule.KeepaliveHours = []int{22}
 	}
-	if len(c.Schedule.BlackcatHours) == 0 {
-		c.Schedule.BlackcatHours = []int{23}
-	}
 	if len(c.Schedule.GrowthHours) == 0 {
 		c.Schedule.GrowthHours = []int{1}
 	}
@@ -688,9 +678,6 @@ func (c *Config) normalize() error {
 	// 非法值直接报错（不静默钳位），配置错误在启动/保存时暴露。
 	if v := c.Schedule.BalanceRefreshJitterPermill; v < 0 || v > 500 {
 		return fmt.Errorf("schedule.balance_refresh_jitter_permill: %d 非法（0 = 关闭，上限 500）", v)
-	}
-	if v := c.Schedule.NightAccountCap; v < 0 {
-		return fmt.Errorf("schedule.night_account_cap: %d 非法（0 = 不限，>0 = 积分前 N 个）", v)
 	}
 	if err := c.validateScheduleHours(); err != nil {
 		return err
@@ -743,9 +730,6 @@ func (c *Config) validateScheduleHours() error {
 	if err := checkHourRange("schedule.keepalive_hours", "keepalive_enabled", c.Schedule.KeepaliveHours); err != nil {
 		return err
 	}
-	if err := checkHourRange("schedule.blackcat_hours", "blackcat_enabled", c.Schedule.BlackcatHours); err != nil {
-		return err
-	}
 	return checkHourRange("schedule.growth_hours", "growth_enabled", c.Schedule.GrowthHours)
 }
 
@@ -771,4 +755,10 @@ func isClockTime(v string) bool {
 	h, _ := strconv.Atoi(v[:2])
 	m, _ := strconv.Atoi(v[3:])
 	return h <= 23 && m <= 59
+}
+
+// HasLegacyBlackcat 老配置里是否还留着已删除的夜猫子键（仅用于启动时提示一次）。
+func (c *Config) HasLegacyBlackcat() bool {
+	return len(c.Schedule.LegacyBlackcatHours) > 0 || len(c.Schedule.LegacyBlackcatEnabled) > 0 ||
+		len(c.Schedule.LegacyNightAccountCap) > 0
 }

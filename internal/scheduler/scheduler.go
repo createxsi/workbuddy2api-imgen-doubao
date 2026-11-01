@@ -33,7 +33,6 @@ type Config struct {
 	TravelHours    []int // 默认 [9,21]：一趟派出 + 一趟领奖闭环
 	ActivityHours  []int // 默认 [10]
 	KeepaliveHours []int // 默认 [22]
-	BlackcatHours  []int // 默认 [23]：夜猫子（23:00–08:00 计数窗口）
 	GrowthHours    []int // 默认 [1]：成长任务队列（Sequential 族每日零点解锁一环，
 	// 01:00 自动扫描+执行；避开零点整防解锁竞态）
 
@@ -51,8 +50,6 @@ type Config struct {
 	ActivityDisabled bool
 	// KeepaliveDisabled 显式关闭 token 保活排程（schedule.keepalive_enabled=false）。
 	KeepaliveDisabled bool
-	// BlackcatDisabled 显式关闭夜猫子排程（schedule.blackcat_enabled=false）。
-	BlackcatDisabled bool
 	// GrowthDisabled 显式关闭成长任务自动排程（schedule.growth_enabled=false）。
 	GrowthDisabled bool
 
@@ -97,9 +94,6 @@ type Scheduler struct {
 	// balanceRound 周期刷新轮次计数，参与逐轮抖动散列。
 	balanceJitter atomic.Int64
 	balanceRound  atomic.Uint64
-
-	// nightAccountCap 夜猫子参与上限（>0 = 只让积分最高的前 N 个合格账号参加；0 = 不限）。
-	nightAccountCap atomic.Int64
 }
 
 // New 构建。
@@ -115,9 +109,6 @@ func New(cfg Config) *Scheduler {
 	}
 	if len(cfg.KeepaliveHours) == 0 {
 		cfg.KeepaliveHours = []int{22}
-	}
-	if len(cfg.BlackcatHours) == 0 {
-		cfg.BlackcatHours = []int{23}
 	}
 	cfg.AccountSpread, cfg.AccountSpreadMinGap = clampSpread(cfg.AccountSpread, cfg.AccountSpreadMinGap)
 	return &Scheduler{
@@ -177,8 +168,8 @@ func (s *Scheduler) SetIncludeDisabledInTasks(v bool) {
 	s.schedMu.Unlock()
 }
 
-func (s *Scheduler) Reconfigure(checkinHours, travelHours, activityHours, keepaliveHours, blackcatHours, growthHours []int,
-	checkinDisabled, travelDisabled, activityDisabled, keepaliveDisabled, blackcatDisabled, growthDisabled bool) {
+func (s *Scheduler) Reconfigure(checkinHours, travelHours, activityHours, keepaliveHours, growthHours []int,
+	checkinDisabled, travelDisabled, activityDisabled, keepaliveDisabled, growthDisabled bool) {
 	s.schedMu.Lock()
 	if len(checkinHours) > 0 {
 		s.cfg.CheckinHours = checkinHours
@@ -192,9 +183,6 @@ func (s *Scheduler) Reconfigure(checkinHours, travelHours, activityHours, keepal
 	if len(keepaliveHours) > 0 {
 		s.cfg.KeepaliveHours = keepaliveHours
 	}
-	if len(blackcatHours) > 0 {
-		s.cfg.BlackcatHours = blackcatHours
-	}
 	if len(growthHours) > 0 {
 		s.cfg.GrowthHours = growthHours
 	}
@@ -202,7 +190,6 @@ func (s *Scheduler) Reconfigure(checkinHours, travelHours, activityHours, keepal
 	s.cfg.TravelDisabled = travelDisabled
 	s.cfg.ActivityDisabled = activityDisabled
 	s.cfg.KeepaliveDisabled = keepaliveDisabled
-	s.cfg.BlackcatDisabled = blackcatDisabled
 	s.cfg.GrowthDisabled = growthDisabled
 	s.schedMu.Unlock()
 	poke(s.rearmSchedule)
@@ -244,7 +231,6 @@ const (
 	taskTravel
 	taskActivity
 	taskKeepalive
-	taskBlackcat
 	taskGrowth
 )
 
@@ -254,9 +240,9 @@ const (
 // 排程参数在 schedMu 下快照，与 Reconfigure 的并发写隔离。
 func (s *Scheduler) nextWake(now time.Time) (time.Time, []taskKind) {
 	s.schedMu.Lock()
-	checkinHours, keepaliveHours, blackcatHours := s.cfg.CheckinHours, s.cfg.KeepaliveHours, s.cfg.BlackcatHours
+	checkinHours, keepaliveHours := s.cfg.CheckinHours, s.cfg.KeepaliveHours
 	travelHours, activityHours := s.cfg.TravelHours, s.cfg.ActivityHours
-	checkinOff, keepaliveOff, blackcatOff := s.cfg.CheckinDisabled, s.cfg.KeepaliveDisabled, s.cfg.BlackcatDisabled
+	checkinOff, keepaliveOff := s.cfg.CheckinDisabled, s.cfg.KeepaliveDisabled
 	growthHours, growthOff := s.cfg.GrowthHours, s.cfg.GrowthDisabled
 	travelOff, activityOff := s.cfg.TravelDisabled, s.cfg.ActivityDisabled
 	s.schedMu.Unlock()
@@ -277,9 +263,6 @@ func (s *Scheduler) nextWake(now time.Time) (time.Time, []taskKind) {
 	}
 	if !keepaliveOff {
 		slots = append(slots, slot{nextFire(now, keepaliveHours), taskKeepalive})
-	}
-	if !blackcatOff {
-		slots = append(slots, slot{nextFire(now, blackcatHours), taskBlackcat})
 	}
 	if !growthOff {
 		slots = append(slots, slot{nextFire(now, growthHours), taskGrowth})
@@ -432,8 +415,6 @@ func (s *Scheduler) runBatch(ctx context.Context, kinds []taskKind) {
 				s.runActivity(withSpread(ctx, "activity"))
 			case taskKeepalive:
 				s.runKeepalive(withSpread(ctx, "keepalive"))
-			case taskBlackcat:
-				s.runBlackcat(withSpread(ctx, "blackcat"))
 			case taskGrowth:
 				// 成长任务队列：回调在 panel 侧异步启动（返回不等执行完），nil 未挂载则跳过。
 				s.schedMu.Lock()

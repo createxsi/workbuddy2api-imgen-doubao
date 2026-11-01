@@ -66,7 +66,6 @@ func TestNextWakeSameInstantFiresAll(t *testing.T) {
 		KeepaliveHours:   []int{22},
 		TravelDisabled:   true,
 		ActivityDisabled: true,
-		BlackcatDisabled: true,
 	})
 	at, kinds := s.nextWake(time.Date(2026, 9, 11, 21, 30, 0, 0, cst.Loc))
 	if want := time.Date(2026, 9, 11, 22, 0, 0, 0, cst.Loc); !at.Equal(want) {
@@ -128,7 +127,6 @@ func TestNextWakeBothDisabledNothingScheduled(t *testing.T) {
 		TravelDisabled:    true,
 		ActivityDisabled:  true,
 		KeepaliveDisabled: true,
-		BlackcatDisabled:  true,
 		CheckinHours:      []int{9, 21},
 		KeepaliveHours:    []int{22},
 	})
@@ -696,7 +694,6 @@ func TestPausedVsDisabledTaskParticipation(t *testing.T) {
 		t.Errorf("checkin calls=%d want 2（正常 + 暂停参与；禁用跳过）", got)
 	}
 }
-
 
 // TestPausedStillTravels 暂停号照常跑旅行：旅行是纯 RPC（状态/派出/领奖 +
 // 领养前置上报），不发模型对话，与「让位防风控」不冲突——唯一被跳过的

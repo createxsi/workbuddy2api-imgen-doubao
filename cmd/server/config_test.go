@@ -865,23 +865,22 @@ func TestScheduleHumanizeConfig(t *testing.T) {
 	if err := c.normalize(); err != nil {
 		t.Fatal(err)
 	}
-	if c.Schedule.BalanceRefreshJitterPermill != 0 || c.Schedule.NightAccountCap != 0 {
-		t.Fatalf("缺省应全关：jitter=%d cap=%d", c.Schedule.BalanceRefreshJitterPermill, c.Schedule.NightAccountCap)
+	if c.Schedule.BalanceRefreshJitterPermill != 0 {
+		t.Fatalf("缺省应关：jitter=%d", c.Schedule.BalanceRefreshJitterPermill)
 	}
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "c.json")
-	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_jitter_permill":200,"night_account_cap":3}}`), 0o600)
+	os.WriteFile(fp, []byte(`{"schedule":{"balance_refresh_jitter_permill":200}}`), 0o600)
 	c2, err := Load(fp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c2.Schedule.BalanceRefreshJitterPermill != 200 || c2.Schedule.NightAccountCap != 3 {
+	if c2.Schedule.BalanceRefreshJitterPermill != 200 {
 		t.Fatalf("解析失败：%+v", c2.Schedule)
 	}
 	for _, bad := range []string{
 		`{"schedule":{"balance_refresh_jitter_permill":501}}`,
 		`{"schedule":{"balance_refresh_jitter_permill":-1}}`,
-		`{"schedule":{"night_account_cap":-1}}`,
 	} {
 		os.WriteFile(fp, []byte(bad), 0o600)
 		if _, err := Load(fp); err == nil {
@@ -889,13 +888,43 @@ func TestScheduleHumanizeConfig(t *testing.T) {
 		}
 	}
 	t.Setenv("WB2A_SCHEDULE_BALANCE_REFRESH_JITTER_PERMILL", "150")
-	t.Setenv("WB2A_SCHEDULE_NIGHT_ACCOUNT_CAP", "4")
 	c3, err := Load("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c3.Schedule.BalanceRefreshJitterPermill != 150 || c3.Schedule.NightAccountCap != 4 {
+	if c3.Schedule.BalanceRefreshJitterPermill != 150 {
 		t.Fatalf("env 覆盖失败：%+v", c3.Schedule)
+	}
+}
+
+// TestLegacyBlackcatKeysIgnored 夜猫子已删：老配置里的三个键（含非法值、任意类型）
+// 照常加载不报错、被忽略，且保存时原样保留。
+func TestLegacyBlackcatKeysIgnored(t *testing.T) {
+	fp := filepath.Join(t.TempDir(), "c.json")
+	os.WriteFile(fp, []byte(`{"schedule":{"blackcat_hours":[25],"blackcat_enabled":"x","night_account_cap":-1}}`), 0o600)
+	c, err := Load(fp)
+	if err != nil {
+		t.Fatalf("旧键不应报错：%v", err)
+	}
+	if !c.HasLegacyBlackcat() {
+		t.Fatal("应识别出旧键")
+	}
+	out, err := json.Marshal(c.Schedule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), `"blackcat_hours":[25]`) {
+		t.Fatalf("保存应原样保留旧键：%s", out)
+	}
+	c2 := Default()
+	if err := c2.normalize(); err != nil {
+		t.Fatal(err)
+	}
+	if c2.HasLegacyBlackcat() {
+		t.Fatal("缺省配置不应带旧键")
+	}
+	if b, _ := json.Marshal(c2.Schedule); strings.Contains(string(b), "blackcat") {
+		t.Fatalf("缺省序列化不应出现旧键：%s", b)
 	}
 }
 

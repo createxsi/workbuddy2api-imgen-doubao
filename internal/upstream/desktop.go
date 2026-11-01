@@ -390,24 +390,6 @@ func DesktopPlaybookPromptSequence(conversationID, requestID, caseID, caseName s
 	return events
 }
 
-// DesktopDesignCanvasSequence 构造「设计创意画布」事件组（实测 create_canvas 计数）：
-// wbx_design_canvas_task_create + wbx_design_canvas_open（Ardot create_design 工具
-// 完成时客户端经 metrics 通道上报，同一 /v2/report 端点）。三账号实测 1/1 点亮。
-func DesktopDesignCanvasSequence(conversationID, requestID string) []DesktopEvent {
-	events := DesktopChatSequence(conversationID, requestID, "msg-canvas", "fast-model", "fast-model")
-	return append(events,
-		DesktopEvent{
-			"eventCode": "wbx_design_canvas_task_create", "conversationId": conversationID,
-			"requestId": requestID, "source": "summon_keyword", "cost": 12000, "isSuccessful": true,
-		},
-		DesktopEvent{
-			"eventCode": "wbx_design_canvas_open", "conversationId": conversationID,
-			"requestId": requestID, "id": "ardot-file-" + requestID[len(requestID)-8:],
-			"source": "summon_keyword", "type": "page", "cost": 13000, "isSuccessful": true,
-		},
-	)
-}
-
 // MarketExpert 专家市场的单个专家（/portal/operation-platform/market/expert/list 响应子集）。
 type MarketExpert struct {
 	ExpertID      string `json:"expert_id"`

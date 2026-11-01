@@ -11,7 +11,6 @@ func TestClassifyLine(t *testing.T) {
 		"| #001 | glm-5.2 | stream | 200 | uid=c8a3e793 | TTFB=120ms |": ChChat,
 		"school c8a3e793: ★ 分享任务完成":                                     ChTask,
 		"streak-bonus 5c162cc9: 🎊 新手礼包 +100c":                           ChTask,
-		"blackcat c8a3e793: 完成 3 次夜间对话":                                 ChTask,
 		"checkin 5c162cc9: 已签到":                                         ChTask,
 		"panel: 任务动作 uid=x code=chat_5":                                 ChTask,
 		"panel: 队列启动：6 项（并发 2）":                                         ChTask,

@@ -206,7 +206,6 @@ func main() {
 		TravelHours:    cfg.Schedule.TravelHours,
 		ActivityHours:  cfg.Schedule.ActivityHours,
 		KeepaliveHours: cfg.Schedule.KeepaliveHours,
-		BlackcatHours:  cfg.Schedule.BlackcatHours,
 		GrowthHours:    cfg.Schedule.GrowthHours,
 		// 快过期积分优先消耗：签到/余额刷新按此窗口分桶（issue:积分过期）。
 		ExpiringSoonWindow: cfg.ExpiringSoonDur,
@@ -214,7 +213,6 @@ func main() {
 		TravelDisabled:     !cfg.Schedule.TravelEnabled,
 		ActivityDisabled:   !cfg.Schedule.ActivityEnabled,
 		KeepaliveDisabled:  !cfg.Schedule.KeepaliveEnabled,
-		BlackcatDisabled:   !cfg.Schedule.BlackcatEnabled,
 		GrowthDisabled:     !cfg.Schedule.GrowthEnabled,
 		// 保号类四任务是否覆盖禁用账号（缺省 false = 禁用即跳过，保持既有行为）。
 		IncludeDisabledInTasks: cfg.Schedule.IncludeDisabledInTasks,
@@ -244,11 +242,8 @@ func main() {
 	} else {
 		log.Printf("token 保活已启用：%v 点", cfg.Schedule.KeepaliveHours)
 	}
-	switch {
-	case !cfg.Schedule.BlackcatEnabled:
-		log.Printf("夜猫子已禁用（schedule.blackcat_enabled=false）")
-	default:
-		log.Printf("夜猫子已启用：%v 点（23:00–08:00 窗口 glm-5.2 对话补足）", cfg.Schedule.BlackcatHours)
+	if cfg.HasLegacyBlackcat() {
+		log.Printf("夜猫子任务已下架并移除：schedule.blackcat_hours / blackcat_enabled / night_account_cap 已忽略，可从配置中删除")
 	}
 	switch {
 	case !cfg.Schedule.BalanceRefreshEnabled:
@@ -373,12 +368,8 @@ func main() {
 	updateManager.SetRestart(stop)
 	go updateManager.Run(ctx)
 	sch.SetBalanceJitter(cfg.Schedule.BalanceRefreshJitterPermill)
-	sch.SetNightAccountCap(cfg.Schedule.NightAccountCap)
 	if cfg.Schedule.BalanceRefreshJitterPermill > 0 {
 		log.Printf("余额刷新抖动：间隔 ±%d‰，账号错峰起跑（schedule.balance_refresh_jitter_permill）", cfg.Schedule.BalanceRefreshJitterPermill)
-	}
-	if cfg.Schedule.NightAccountCap > 0 {
-		log.Printf("夜猫子参与上限：积分最高的前 %d 个账号（schedule.night_account_cap）", cfg.Schedule.NightAccountCap)
 	}
 	go sch.Run(ctx)
 	sch.StartBalanceRefresh(ctx, cfg.BalanceRefreshInterval)
@@ -505,7 +496,7 @@ func panelListenPath(listen string) string {
 // 热生效范围（设计取舍）：
 //   - api_key / cooldown.soft_rate / features.sanitize_blacklist_fingerprints → livecfg 快照
 //   - pool.* → pool.SetBreaker/SetMaxInFlight/SetSoftRateMax/SetWeights/SetCostExploreInterval/SetPreferExpiring/SetCreditFloor
-//   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetBalanceJitter/SetNightAccountCap/SetExpiringSoonWindow
+//   - schedule.* → scheduler.Reconfigure/SetBalanceInterval/SetBalanceJitter/SetExpiringSoonWindow
 //
 // 需重启（涉及监听地址、HTTP client 超时、auth_dir 等装配期依赖）：
 //   - listen / auth_dir / state_file / upstream.* / upstash.* / session_sticky.*（TTL 类）
@@ -602,13 +593,12 @@ func saveConfig(raw []byte, path string, live *livecfg.Holder, p *pool.Pool, up 
 	sch.SetExpiringSoonWindow(newCfg.ExpiringSoonDur)
 	sch.Reconfigure(
 		newCfg.Schedule.CheckinHours, newCfg.Schedule.TravelHours,
-		newCfg.Schedule.ActivityHours, newCfg.Schedule.KeepaliveHours, newCfg.Schedule.BlackcatHours,
+		newCfg.Schedule.ActivityHours, newCfg.Schedule.KeepaliveHours,
 		newCfg.Schedule.GrowthHours,
 		!newCfg.Schedule.CheckinEnabled, !newCfg.Schedule.TravelEnabled,
-		!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled, !newCfg.Schedule.BlackcatEnabled,
+		!newCfg.Schedule.ActivityEnabled, !newCfg.Schedule.KeepaliveEnabled,
 		!newCfg.Schedule.GrowthEnabled)
 	sch.SetBalanceJitter(newCfg.Schedule.BalanceRefreshJitterPermill)
-	sch.SetNightAccountCap(newCfg.Schedule.NightAccountCap)
 	sch.SetBalanceInterval(newCfg.BalanceRefreshInterval)
 	sch.SetIncludeDisabledInTasks(newCfg.Schedule.IncludeDisabledInTasks)
 	sch.SetAccountSpread(time.Duration(newCfg.Schedule.AccountSpreadMinutes)*time.Minute,
