@@ -41,9 +41,57 @@ import (
 const (
 	desktopReportPath    = "/v2/report"
 	desktopAppearanceSet = "/v2/user-asset/appearance/set"
-	// desktopUA 实测桌面客户端 UA（5.5.6 内嵌 CLI 2.137.1）。
-	desktopUA = "WorkBuddy/5.5.6 WorkBuddy/5.5.6 CLI/2.137.1"
+	// 桌面端版本三元组（ideVersion / commit / releaseDate）按发行版分开：两版分发包的
+	// commit 与 releaseDate 是打包期常量，无法从版本号推导。/v2/report 是桌面端行为
+	// 指纹，恒用桌面端版本，不跟随 upstream.client_version。
+	desktopVersionCN         = "5.9.3"
+	desktopCommitCN          = "d46924219e79332f49c37ccebf27292f87001b19"
+	desktopReleaseDateCN     = int64(1793093056315)
+	desktopVersionGlobal     = "5.9.4"
+	desktopCommitGlobal      = "fa0a0901906addaa1a4259f6df347388a5563ded"
+	desktopReleaseDateGlobal = int64(1793288804029)
 )
+
+// desktopTriple 返回账号所属发行版的桌面端 (ideVersion, commit, releaseDate)。
+func desktopTriple(a *auth.Auth) (ver, commit string, release int64) {
+	if a != nil && a.IsGlobal() {
+		return desktopVersionGlobal, desktopCommitGlobal, desktopReleaseDateGlobal
+	}
+	return desktopVersionCN, desktopCommitCN, desktopReleaseDateCN
+}
+
+// desktopUAFor 桌面端 RPC 族 UA（/v2/report、user-asset、portal 同族）：
+// CN `WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0`，global 首两段为 workbuddy-ai。
+func desktopUAFor(a *auth.Auth) string {
+	ver, _, _ := desktopTriple(a)
+	realm := "cn"
+	if a != nil && a.IsGlobal() {
+		realm = "global"
+	}
+	return DesktopRPCUserAgent(realm, ver, defaultCliVersion)
+}
+
+// desktopHost X-Domain 用的裸主机名（真机 www.workbuddy.cn / www.workbuddy.ai），不带 scheme。
+func (c *Client) desktopHost(a *auth.Auth) string {
+	return hostOf(c.desktopBase(a), "www.workbuddy.cn")
+}
+
+// setDesktopReportHeaders 桌面端 /v2/report 头族（真机 11 头，Node 形态）：无 Origin /
+// Referer / X-Requested-With / x-client-platform。X-Request-ID 为纯随机 32 hex。
+func setDesktopReportHeaders(req *http.Request, a *auth.Auth, host string) {
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
+	req.Header.Set("X-Request-ID", session.NewTraceID())
+	req.Header.Set("X-Product", "SaaS")
+	req.Header.Set("User-Agent", desktopUAFor(a))
+	if at := a.AccessTokenValue(); at != "" {
+		req.Header.Set("Authorization", "Bearer "+at)
+	}
+	if a.UID != "" {
+		req.Header.Set("X-User-Id", a.UID)
+	}
+	req.Header.Set("X-Domain", host)
+}
 
 // desktopBase 桌面端 /v2/report 与 user-asset 走 chatBase（copilot.tencent.com）。
 func (c *Client) desktopBase(a *auth.Auth) string { return c.chatBase(a) }
@@ -59,32 +107,39 @@ func deriveID(a *auth.Auth, salt string) string {
 type DesktopEvent map[string]any
 
 // desktopFingerprint 公共桌面指纹字段（注入每个事件，覆盖同名业务键）。
+// 版本三元组按发行版取；qimei36 仅国内版带（国际版真机事件无此键）。
 func desktopFingerprint(a *auth.Auth) map[string]any {
 	now := time.Now().UnixMilli()
-	return map[string]any{
+	ver, commit, release := desktopTriple(a)
+	fp := map[string]any{
 		"timezone":     "Asia/Shanghai",
 		"reportDelay":  2000,
 		"userId":       a.UID,
 		"username":     a.Nickname,
 		"userNickname": a.Nickname,
 		"product":      "SaaS",
-		"releaseDate":  int64(1789036585355),
-		"commit":       "5f9692923c93033111c51ad7b003eb80204a9b75",
+		"releaseDate":  release,
+		"commit":       commit,
 		"ideName":      "WorkBuddy",
 		"ideType":      "WorkBuddy",
-		"ideVersion":   "5.5.6",
+		"ideVersion":   ver,
 		"machineId":    deriveID(a, "machine"),
 		"sessionId":    deriveID(a, "session"),
 		"extName":      "workbuddy-desktop",
-		"extVersion":   "5.5.6",
+		"extVersion":   ver,
 		"os":           "win32",
 		"arch":         "x64",
-		"osVersion":    "10.0.26220",
-		"cpuCores":     20,
-		"memorySize":   24,
+		"osVersion":    "10.0.28000",
+		"cpuModel":     "11th Gen Intel(R) Core(TM) i5-11320H @ 3.20GHz",
+		"cpuCores":     8,
+		"memorySize":   16,
 		"timestamp":    now,
 		"presentAt":    now,
 	}
+	if a != nil && !a.IsGlobal() {
+		fp["qimei36"] = deriveID(a, "qimei")
+	}
+	return fp
 }
 
 // ReportDesktopEvent 以桌面客户端指纹向 copilot.tencent.com/v2/report 批量上报事件。
@@ -114,16 +169,7 @@ func (c *Client) ReportDesktopEvent(a *auth.Auth, events ...DesktopEvent) error 
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
-	req.Header.Set("User-Agent", desktopUA)
-	req.Header.Set("X-Domain", c.desktopBase(a))
-	req.Header.Set("X-Product", "SaaS")
-	req.Header.Set("X-Request-ID", session.NewMessageID())
-	if a.UID != "" {
-		req.Header.Set("X-User-Id", a.UID)
-	}
+	setDesktopReportHeaders(req, a, c.desktopHost(a))
 	_, err = c.doJSON(req)
 	return err
 }
@@ -218,7 +264,7 @@ func (c *Client) SetAppearanceTheme(a *auth.Auth, resourceKey string) error {
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
-	req.Header.Set("User-Agent", desktopUA)
+	req.Header.Set("User-Agent", desktopUAFor(a))
 	req.Header.Set("X-Product", "SaaS")
 	if a.UID != "" {
 		req.Header.Set("X-User-Id", a.UID)
@@ -262,11 +308,12 @@ func DesktopAutomationCreateEvent(name string) DesktopEvent {
 	}
 }
 
-// ReportWebEvent 以 Web 端指纹向 www.workbuddy.cn/v2/report 上报单事件。
-// 与桌面指纹（copilot 域）不同：web 域事件是浏览器形状（os/machineId/userAgent），
-// 用于 Library_read 等页面行为类任务（实测 library_doc_intro_click 4 秒点亮）。
+// ReportWebEvent 向 web 域 /v2/report 上报单事件（Library_read 等页面行为类任务）。
+// 头族按官方 /v2/report 唯一形态（Node 11 头，同 setDesktopReportHeaders）：不再造
+// 「浏览器 UA + Origin + Referer + x-client-platform」的第三族请求。body 仍保留 web
+// 事件形状（无真机样本可比对，只改头不动体），其中 userAgent 字段取客户端 UA。
 func (c *Client) ReportWebEvent(a *auth.Auth, eventCode, pageURL, elementID, elementName string) error {
-	ua := "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36"
+	ua := c.userAgent(a)
 	ev := map[string]any{
 		"eventCode": eventCode, "timestamp": time.Now().UnixMilli(), "reportDelay": 0,
 		"pageURL": pageURL, "elementId": elementID, "elementName": elementName,
@@ -278,20 +325,12 @@ func (c *Client) ReportWebEvent(a *auth.Auth, eventCode, pageURL, elementID, ele
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.webBase(a)+"/v2/report", bytes.NewReader(raw))
+	base := c.webBase(a)
+	req, err := http.NewRequest(http.MethodPost, base+"/v2/report", bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("x-client-platform", "web")
-	req.Header.Set("Origin", c.webBase(a))
-	req.Header.Set("Referer", pageURL)
-	req.Header.Set("User-Agent", ua)
-	if a.UID != "" {
-		req.Header.Set("X-User-Id", a.UID)
-	}
+	setDesktopReportHeaders(req, a, hostOf(base, "www.workbuddy.cn"))
 	_, err = c.doJSON(req)
 	return err
 }
@@ -413,8 +452,8 @@ func (c *Client) marketExpertList(a *auth.Auth, body map[string]any) ([]MarketEx
 	}
 	req.Header.Set("Authorization", "Bearer "+a.AccessTokenValue())
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", desktopUA)
-	req.Header.Set("X-Domain", c.chatBase(a))
+	req.Header.Set("User-Agent", desktopUAFor(a))
+	req.Header.Set("X-Domain", c.chatHost(a))
 	req.Header.Set("X-Product", "SaaS")
 	if a.UID != "" {
 		req.Header.Set("X-User-Id", a.UID)

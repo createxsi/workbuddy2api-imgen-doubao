@@ -44,11 +44,11 @@ func TestUserAgentDefaultEmptyKeepsClientUA(t *testing.T) {
 			wantUA: defaultUAString,
 		},
 		{
-			name: "billing_report",
+			name: "report",
 			call: func(c *Client) error {
 				return c.ReportChatActivity(&auth.Auth{AccessToken: "at", UID: "u1"}, "cid", "")
 			},
-			wantUA: "WorkBuddy/5.9.3",
+			wantUA: "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

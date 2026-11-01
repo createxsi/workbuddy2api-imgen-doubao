@@ -3,6 +3,7 @@
 package upstream
 
 import (
+	"net"
 	"net/http"
 	"strings"
 
@@ -466,6 +467,33 @@ func ExtractClientIP(r *http.Request) string {
 		return real
 	}
 	return ""
+}
+
+// chatHost 当前 chat base 的裸主机名（X-Domain 用，不带 scheme / 端口 / 路径）。
+func (c *Client) chatHost(a *auth.Auth) string {
+	return hostOf(c.chatBase(a), "www.workbuddy.cn")
+}
+
+// billingHost 当前 billing base 的裸主机名（X-Domain 兜底用）。
+func (c *Client) billingHost(a *auth.Auth) string {
+	return hostOf(c.billingBase(a), "www.workbuddy.cn")
+}
+
+// hostOf 从 base URL 剥出裸主机名；空则回落 fallback。
+func hostOf(base, fallback string) string {
+	if i := strings.Index(base, "://"); i >= 0 {
+		base = base[i+3:]
+	}
+	if i := strings.IndexAny(base, "/?#"); i >= 0 {
+		base = base[:i]
+	}
+	if h, _, err := net.SplitHostPort(base); err == nil {
+		base = h
+	}
+	if base == "" {
+		return fallback
+	}
+	return base
 }
 
 // BillingHeaders billing 接口请求头。

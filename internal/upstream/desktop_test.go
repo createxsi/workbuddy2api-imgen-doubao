@@ -40,8 +40,8 @@ func TestReportDesktopEventFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("report desktop: %v", err)
 	}
-	if gotUA != desktopUA {
-		t.Errorf("UA=%q want %q", gotUA, desktopUA)
+	if want := "WorkBuddy/5.9.3 WorkBuddy/5.9.3 CLI/2.165.0"; gotUA != want {
+		t.Errorf("UA=%q want %q", gotUA, want)
 	}
 	if len(got) != 1 {
 		t.Fatalf("events=%d want 1", len(got))
@@ -102,7 +102,7 @@ func TestSetAppearanceTheme(t *testing.T) {
 		if r.URL.Path != "/v2/user-asset/appearance/set" {
 			t.Errorf("path=%s want /v2/user-asset/appearance/set", r.URL.Path)
 		}
-		if r.Header.Get("User-Agent") != desktopUA {
+		if r.Header.Get("User-Agent") != desktopUAFor(nil) {
 			t.Errorf("UA=%q want desktop UA", r.Header.Get("User-Agent"))
 		}
 		raw, _ := io.ReadAll(r.Body)
@@ -121,7 +121,7 @@ func TestSetAppearanceTheme(t *testing.T) {
 }
 
 // TestDesktopChatWithExpertUsesChatUA 专家对话走 /v2/chat/completions，UA 必须与主对话
-// 同形态（c.userAgent），不能是固定旧版本号的 desktopUA。
+// 同形态（c.userAgent）。
 func TestDesktopChatWithExpertUsesChatUA(t *testing.T) {
 	var gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -136,8 +136,5 @@ func TestDesktopChatWithExpertUsesChatUA(t *testing.T) {
 	_, _, _ = c.DesktopChatWithExpert(a, "expert-x")
 	if want := c.userAgent(a); gotUA != want {
 		t.Fatalf("UA=%q want %q", gotUA, want)
-	}
-	if gotUA == desktopUA {
-		t.Fatalf("专家对话不应使用固定的 desktopUA")
 	}
 }
