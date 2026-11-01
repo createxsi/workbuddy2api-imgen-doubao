@@ -362,6 +362,16 @@ func (m *Manager) Install(ctx context.Context) (err error) {
 		return fmt.Errorf("启动更新进程: %w", err)
 	}
 	log.Printf("[updater] 已准备 v%s，服务即将重启", ver.String())
+	// 真正的替换在 helper 进程里；helper 中途失败时本进程会继续活着，Installing 不能
+	// 永久卡在 true（否则之后每次安装都被「更新已在进行中」挡住）。
+	time.AfterFunc(installWatchdog, func() {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		if m.status.Installing {
+			m.status.Installing = false
+			m.status.LastError = "更新进程未在期限内完成替换，已复位，可重试"
+		}
+	})
 	return nil
 }
 
@@ -474,7 +484,14 @@ func (m *Manager) download(ctx context.Context, rawURL string, size, limit int64
 		return err
 	}
 	req.Header.Set("User-Agent", userAgent)
+	// 不设整体超时（慢网下载大包会被 60s 截断），改为「N 秒无新字节」即中止。
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	req = req.WithContext(ctx)
+	stall := time.AfterFunc(downloadStallWindow, cancel)
+	defer stall.Stop()
 	client := *m.client
+	client.Timeout = 0
 	client.CheckRedirect = func(r *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return errors.New("下载重定向次数过多")
@@ -495,8 +512,11 @@ func (m *Manager) download(ctx context.Context, rawURL string, size, limit int64
 	if resp.ContentLength > limit {
 		return errors.New("下载文件超过大小限制")
 	}
-	n, err := io.Copy(dst, io.LimitReader(resp.Body, limit+1))
+	n, err := io.Copy(&stallWriter{w: dst, t: stall, d: downloadStallWindow}, io.LimitReader(resp.Body, limit+1))
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("下载更新文件失败：%s 内无数据，已中止", downloadStallWindow)
+		}
 		return fmt.Errorf("写入更新文件失败: %w", err)
 	}
 	if n > limit {
@@ -506,6 +526,27 @@ func (m *Manager) download(ctx context.Context, rawURL string, size, limit int64
 		return fmt.Errorf("下载文件大小不符: got %d, want %d", n, size)
 	}
 	return nil
+}
+
+// downloadStallWindow 下载「N 秒无新字节」守卫窗口；installWatchdog 拉起 helper 后
+// 等待本进程被替换重启的期限，超时复位 Installing 以便重试。
+var (
+	downloadStallWindow = 30 * time.Second
+	installWatchdog     = 3 * time.Minute
+)
+
+// stallWriter 每写入新数据就重置停滞定时器。
+type stallWriter struct {
+	w io.Writer
+	t *time.Timer
+	d time.Duration
+}
+
+func (s *stallWriter) Write(p []byte) (int, error) {
+	if len(p) > 0 {
+		s.t.Reset(s.d)
+	}
+	return s.w.Write(p)
 }
 
 // RestartAfter 延迟触发重启回调（给 HTTP 响应留出写回时间）。
@@ -552,7 +593,9 @@ func (m *Manager) scheduleDue(now time.Time) (auto, regular bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	day := now.Format("2006-01-02")
-	auto = m.settings.AutoEnabled && now.Format("15:04") == m.settings.AutoTime && m.lastAutoDay != day
+	// 窗口式判定：今天没跑过且已到/过目标时刻。分钟精确相等会因 ticker 相位漂移、
+	// 上一轮检查跨过目标分钟、进程晚启动而当天静默落空。
+	auto = m.settings.AutoEnabled && m.settings.AutoTime != "" && now.Format("15:04") >= m.settings.AutoTime && m.lastAutoDay != day
 	if auto {
 		m.lastAutoDay = day
 	}
@@ -576,8 +619,13 @@ func (m *Manager) defaultEnvBlocked() string {
 }
 
 func normalizeAutoTime(s string) string {
-	if strings.TrimSpace(s) == "" {
+	s = strings.TrimSpace(s)
+	if s == "" {
 		return DefaultAutoTime
+	}
+	// 补齐两位小时（4:00 → 04:00），自动安装按字符串比较时刻。
+	if t, err := time.Parse("15:04", s); err == nil {
+		return t.Format("15:04")
 	}
 	return s
 }
@@ -852,6 +900,9 @@ func HandleSelfUpdate(args []string) (handled bool, err error) {
 		if perr != nil || pid <= 0 {
 			return true, errors.New("清理进程参数无效")
 		}
+		if err := validateHelperFile(args[3], ""); err != nil {
+			return true, err
+		}
 		if err := waitForProcessExit(pid, 60*time.Second); err != nil {
 			return true, err
 		}
@@ -866,6 +917,9 @@ func HandleSelfUpdate(args []string) (handled bool, err error) {
 		return true, errors.New("更新进程参数无效")
 	}
 	stagePath, targetPath, cwd := args[3], args[4], args[5]
+	if err := validateHelperFile(stagePath, filepath.Dir(targetPath)); err != nil {
+		return true, err
+	}
 	var origArgs []string
 	if err := json.Unmarshal([]byte(args[6]), &origArgs); err != nil {
 		return true, fmt.Errorf("解析原始启动参数: %w", err)
@@ -887,6 +941,30 @@ func HandleSelfUpdate(args []string) (handled bool, err error) {
 	return true, swapAndStart(stagePath, targetPath, func(probe time.Duration) error {
 		return startTarget(targetPath, origArgs, probe)
 	})
+}
+
+// validateHelperFile 私有更新参数里的文件只允许是本程序目录下的 .wb2api-* 临时文件，
+// 防止这两个入口被当成任意路径删除/替换原语。dir 为空时取本程序所在目录。
+func validateHelperFile(p, dir string) error {
+	if dir == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		dir = filepath.Dir(exe)
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return err
+	}
+	absDir, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if filepath.Dir(abs) != absDir || !strings.HasPrefix(filepath.Base(abs), ".wb2api-") {
+		return fmt.Errorf("更新参数文件路径不合法: %s", p)
+	}
+	return nil
 }
 
 // swapAndStart 替换程序并启动新版本；替换失败或新版本启动即退出时恢复旧程序并
