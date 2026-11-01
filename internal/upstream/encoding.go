@@ -3,9 +3,9 @@
 //   - chat 请求体 ≥1KB 时 gzip（Content-Encoding: gzip）。
 //
 // 显式声明 Accept-Encoding 会关掉 net/http 的透明解压，所以必须自己解：
-// decodeTransport 在传输层按 Content-Encoding 流式解压（SSE 长流同样适用），并
+// wireTransport（wire.go）在传输层按 Content-Encoding 流式解压（SSE 长流同样适用），并
 // 剥掉 Content-Encoding / Content-Length，调用方看到的永远是明文；doJSON 另有
-// decodeResponseBody 兜底（注入的测试 client 不经 decodeTransport）。
+// decodeResponseBody 兜底（注入的测试 client 不经 wireTransport）。
 // 解压失败表现为读错误（非 *Error），不进 Classify，不罚号。
 //
 // 开关：Client.WireCompression（config upstream.wire_compression，缺省开）；关闭后
@@ -113,42 +113,21 @@ func decodeResponseBody(h http.Header, raw []byte) ([]byte, error) {
 	return raw, nil
 }
 
-// decodeTransport 包一层 *http.Transport：请求显式声明了 Accept-Encoding 时，按响应
-// Content-Encoding 流式解压并剥掉编码头。未声明（Go 自己加 gzip）时 net/http 已
-// 透明解压，原样返回。
-type decodeTransport struct {
-	base *http.Transport
-}
-
-func (t *decodeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	resp, err := t.base.RoundTrip(req)
-	if err != nil || req.Header.Get("Accept-Encoding") == "" || req.Method == http.MethodHead {
-		return resp, err
+// decodeResponse 请求显式声明了 Accept-Encoding 时，按响应 Content-Encoding 换成
+// 流式解压 body 并剥掉编码头；未声明（Go 自己加 gzip）时 net/http 已透明解压。
+func decodeResponse(req *http.Request, resp *http.Response) {
+	if req.Header.Get("Accept-Encoding") == "" || req.Method == http.MethodHead {
+		return
 	}
 	chain, ok := encodingChain(resp.Header)
 	if !ok || len(chain) == 0 {
-		return resp, nil
+		return
 	}
 	resp.Body = &lazyDecodeBody{src: resp.Body, chain: chain}
 	resp.Header.Del("Content-Encoding")
 	resp.Header.Del("Content-Length")
 	resp.ContentLength = -1
 	resp.Uncompressed = true
-	return resp, nil
-}
-
-// CloseIdleConnections 透传给底层 Transport（roundTripCloseIdle 依赖）。
-func (t *decodeTransport) CloseIdleConnections() { t.base.CloseIdleConnections() }
-
-// HTTPTransport 取出 RoundTripper 底层的 *http.Transport（含 decodeTransport 包装）。
-func HTTPTransport(rt http.RoundTripper) (*http.Transport, bool) {
-	switch v := rt.(type) {
-	case *http.Transport:
-		return v, true
-	case *decodeTransport:
-		return v.base, true
-	}
-	return nil, false
 }
 
 // lazyDecodeBody 首次 Read 才建解码器（gzip.NewReader 会读头，构造期不应阻塞）。

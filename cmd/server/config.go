@@ -168,6 +168,13 @@ type Config struct {
 		// Accept-Encoding: gzip, compress, deflate, br（响应由网关自行解压）+ chat 请求体
 		// ≥1KB 时 gzip。缺省 true；false 回到 Go 默认（仅 gzip 声明、明文请求体）。需重启。
 		WireCompression bool `json:"wire_compression"`
+		// TLSFingerprint 出站 ClientHello 档位："node"（缺省）复刻官方桌面端 Node/OpenSSL
+		// （JA3/JA4 与真机一致，无 ALPN）；"go" 用 crypto/tls 原生（排障 / 回滚）。需重启。
+		TLSFingerprint string `json:"tls_fingerprint"`
+		// HeaderShape 出站头名拼写、发送顺序、Connection 头按官方真机（缺省 true）。需重启。
+		HeaderShape bool `json:"header_shape"`
+		// ConnPerAccount 连接池按账号隔离：同出口的不同账号不共用 TCP/TLS 连接（缺省 true）。需重启。
+		ConnPerAccount bool `json:"conn_per_account"`
 		// ClientVersion WorkBuddy 客户端版本段（出站 UA 的 `WorkBuddy/<ver>` 与归属头
 		// X-IDE-Version）。空 = 按 realm 取内置默认（CN 5.9.3 / global 5.9.4）。
 		ClientVersion string `json:"client_version"`
@@ -318,6 +325,9 @@ func Default() *Config {
 	c.Schedule.ActivityEnabled = true
 	c.Schedule.KeepaliveEnabled = true
 	c.Upstream.WireCompression = true
+	c.Upstream.TLSFingerprint = "node"
+	c.Upstream.HeaderShape = true
+	c.Upstream.ConnPerAccount = true
 	c.Schedule.BlackcatEnabled = true
 	c.Schedule.BalanceRefreshEnabled = true
 	c.Schedule.BalanceRefreshMinutes = 5
@@ -531,6 +541,14 @@ func (c *Config) normalize() error {
 	}
 	if !isClockTime(c.Update.AutoTime) {
 		return fmt.Errorf("update.auto_time: %q 不是合法时间（HH:MM，北京时间）", c.Update.AutoTime)
+	}
+	switch fp := strings.ToLower(strings.TrimSpace(c.Upstream.TLSFingerprint)); fp {
+	case "", "node":
+		c.Upstream.TLSFingerprint = "node"
+	case "go":
+		c.Upstream.TLSFingerprint = "go"
+	default:
+		return fmt.Errorf("upstream.tls_fingerprint: %q 无效（可选 node / go）", c.Upstream.TLSFingerprint)
 	}
 	if c.Logging.RequestRetentionDays <= 0 {
 		c.Logging.RequestRetentionDays = 7

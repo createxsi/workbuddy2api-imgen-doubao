@@ -69,6 +69,13 @@ var loginHTTP = &http.Client{
 	},
 }
 
+// SetLoginTransport 装配期替换登录 client 的传输（与出站同一 TLS / 头形态）。
+func SetLoginTransport(rt http.RoundTripper) {
+	if rt != nil {
+		loginHTTP.Transport = rt
+	}
+}
+
 // loginAttempts 登录步骤的传输层重试次数：只对「一个 HTTP 响应都没拿到」的失败重试。
 // 三步都可安全重发（auth/state 重签 state；token/account 是只读查询）。已拿到响应的
 // 业务错误或 HTTP 4xx/5xx 不重试，避免拖慢轮询。

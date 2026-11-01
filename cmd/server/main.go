@@ -154,10 +154,15 @@ func main() {
 	// 短 RPC 总时长上限（refresh/checkin/balance/FetchModels），语义不变。
 	up.HTTP.Timeout = time.Duration(cfg.Upstream.TimeoutSeconds) * time.Second
 	// 聊天 SSE 首字节前（响应头）上限：cfg 已 normalize（缺省回落 timeout_seconds）。
-	up.HeaderTimeout = time.Duration(cfg.Upstream.HeaderTimeoutSeconds) * time.Second
-	if tr, ok := upstream.HTTPTransport(up.ChatHTTP.Transport); ok {
-		tr.ResponseHeaderTimeout = up.HeaderTimeout
+	if err := up.ConfigureWire(upstream.WireOptions{
+		TLSFingerprint: cfg.Upstream.TLSFingerprint,
+		HeaderShape:    cfg.Upstream.HeaderShape,
+		ConnPerAccount: cfg.Upstream.ConnPerAccount,
+	}); err != nil {
+		log.Fatalf("config: %v", err)
 	}
+	up.SetHeaderTimeout(time.Duration(cfg.Upstream.HeaderTimeoutSeconds) * time.Second)
+	panel.SetLoginTransport(up.LoginTransport())
 	// 聊天 SSE 流中空闲上限（S3 空闲监控读取）。
 	up.IdleTimeout = time.Duration(cfg.Upstream.IdleTimeoutSeconds) * time.Second
 	up.SanitizeFingerprints.Store(cfg.Features.SanitizeBlacklistFingerprints)
@@ -641,7 +646,7 @@ func restartRequiredFields(c *Config) []string {
 	// upstream.user_agent 在装配期被写进出站 client（main.go 的 up.UserAgent = ...），
 	// 之后不再读取——不在 livecfg 热快照里，也无法热改。此前漏列，导致面板改完
 	// 显示"已保存"却不提示需要重启，用户以为没生效（issue #102 附带发现 2）。
-	out = append(out, "upstream.user_agent", "upstream.dump_dir", "upstream.dump_max_bytes", "upstream.wire_compression")
+	out = append(out, "upstream.user_agent", "upstream.dump_dir", "upstream.dump_max_bytes", "upstream.wire_compression", "upstream.tls_fingerprint", "upstream.header_shape", "upstream.conn_per_account")
 	// 分域 base 同样只在装配期写进上游 client（请求路径并发读取，不做热改）。
 	out = append(out, "cn.chat_base", "cn.billing_base", "global.chat_base", "global.billing_base")
 	if c.Upstash.URL != "" || c.Upstash.Token != "" {

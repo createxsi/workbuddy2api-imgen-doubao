@@ -72,8 +72,17 @@ func newDialer() *net.Dialer {
 //   - TCP 层：DialContext 10s 建连上限 + 15s keepalive 探测，半开连接在建立期
 //     和复用期都能被快速识别（见 dialTimeout/dialKeepAlive 注释）。
 func newTransport() *http.Transport {
-	dialer := newDialer()
-	return &http.Transport{
+	return newTransportWith(nil, TLSFingerprintNode, defaultHeaderShape)
+}
+
+// newTransportWith 按拨号器 / ClientHello 档位 / 头序开关构造 Transport。
+// fp=go 且不重排头序时完全回到 Go 原生 TLS（Transport 自己处理 HTTP(S)_PROXY）；
+// 其余情况由 newTLSDialer 接管 https 拨号（含环境变量代理），Proxy 只管明文 http。
+func newTransportWith(dialer *net.Dialer, fp string, shape bool) *http.Transport {
+	if dialer == nil {
+		dialer = newDialer()
+	}
+	tr := &http.Transport{
 		// 遵循 HTTP_PROXY / HTTPS_PROXY / NO_PROXY 环境变量（未设置时直连）。
 		Proxy:       http.ProxyFromEnvironment,
 		DialContext: dialer.DialContext,
@@ -87,6 +96,11 @@ func newTransport() *http.Transport {
 		IdleConnTimeout:       idleConnTimeout,
 		ResponseHeaderTimeout: responseHeaderTimeout,
 	}
+	if useNodeFingerprint(fp) || shape {
+		tr.Proxy = plainHTTPProxy
+		tr.DialTLSContext = newTLSDialer(dialer, nil, fp, shape)
+	}
+	return tr
 }
 
 // closeIdler 实现该接口的 RoundTripper 支持清空空闲连接池（*http.Transport、

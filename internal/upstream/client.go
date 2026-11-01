@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -792,6 +793,12 @@ type Client struct {
 	// 全链路声明真机 Accept-Encoding + chat 请求体 gzip，见 encoding.go。
 	WireCompression bool
 
+	// TLSFingerprint 出站 ClientHello 档位（node 复刻官方 / go 原生），见 tlsfingerprint.go。
+	TLSFingerprint string
+	headerShape    bool
+	connPerAccount bool
+	dialer         *net.Dialer
+
 	ChatBaseCN    string
 	BillingBaseCN string
 	// WebBaseCN 官网（workbuddy.cn）域：部分「任务领奖」类接口只在此域提供
@@ -820,12 +827,15 @@ type Client struct {
 // TLS 握手超时 / 短 keepalive 探测 / 失败清池，参数见 transport.go——吸收上游
 // kongjianguan 4 连击实测经验）。
 func New() *Client {
-	// decodeTransport：显式声明 Accept-Encoding 后由它流式解压（见 encoding.go）。
-	tr := &decodeTransport{base: newTransport()}
+	// wireTransport：头名拼写 / 头序 / 按账号分池 / 响应解压（见 wire.go）。
+	tr := newWireTransport(newTransport(), defaultHeaderShape, defaultConnPerAccount)
 	c := &Client{
 		HTTP:            &http.Client{Timeout: 120 * time.Second, Transport: tr},
 		ChatHTTP:        &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
 		WireCompression: true,
+		TLSFingerprint:  TLSFingerprintNode,
+		headerShape:     defaultHeaderShape,
+		connPerAccount:  defaultConnPerAccount,
 		// ChatBaseCN 取官方桌面端 endpoint www.workbuddy.cn；copilot.tencent.com 是官方
 		// 网络故障切换里的备选入口（且对部分海外出口握手复位）。cn.chat_base 可覆盖回退。
 		ChatBaseCN: "https://www.workbuddy.cn",
@@ -1009,7 +1019,7 @@ func (c *Client) doJSON(req *http.Request) (json.RawMessage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
-	// 必须在 Classify / Unmarshal 之前解压（未经 decodeTransport 的 client 兜底）；
+	// 必须在 Classify / Unmarshal 之前解压（未经 wireTransport 的 client 兜底）；
 	// 解压失败按传输层错误返回，不进 Classify、不罚号。
 	if raw, err = decodeResponseBody(resp.Header, raw); err != nil {
 		return nil, fmt.Errorf("read body: %w", err)

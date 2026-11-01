@@ -23,7 +23,7 @@
 </p>
 
 <p align="center">
-  <img alt="Go" src="https://img.shields.io/badge/Go-1.22.5-00ADD8?logo=go&logoColor=white&style=flat-square">
+  <img alt="Go" src="https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white&style=flat-square">
   <img alt="API" src="https://img.shields.io/badge/API-OpenAI_Compatible-412991?style=flat-square">
   <img alt="Deploy" src="https://img.shields.io/badge/Deploy-Single_Binary%20%7C%20Docker-2496ED?style=flat-square">
   <img alt="Transport" src="https://img.shields.io/badge/Transport-SSE%20%2F%20Streaming-0DBD8B?style=flat-square">
@@ -237,7 +237,7 @@ flowchart LR
 - **Docker + Docker Compose**（服务端部署方式，镜像内已含低权限用户与全部工具脚本）——或
 - **Windows / macOS / Linux 直接跑单文件二进制**（无需 Docker，见下方「Windows 单文件运行」）
 - 一个或多个已注册的 CodeBuddy 账号，用于 OAuth 登录
-- 宿主机 Go ≥ 1.22（仅从源码构建时需要）
+- 宿主机 Go ≥ 1.24（仅从源码构建时需要）
 
 ### 方式〇：GHCR 镜像（免克隆免构建）
 
@@ -421,6 +421,9 @@ Claude Code 接入：`ANTHROPIC_BASE_URL=http://localhost:7863`（指到网关�
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流） |
 | `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 桌面端默认 UA）。官网「使用端」列按出站 UA 服务端归因；官方 WorkBuddy 桌面 UA 为 `WorkBuddy/<version>`，需要时可配 |
 | `upstream.wire_compression` | `true` | 出站压缩对齐桌面端：全链路声明 `Accept-Encoding: gzip, compress, deflate, br`（网关自行流式解压，解压失败按传输错误处理、不罚号），chat 请求体 ≥1KB 时 gzip。`false` 回到 Go 默认。需重启 |
+| `upstream.tls_fingerprint` | `node` | 出站 ClientHello：`node` 复刻官方桌面端 Node/OpenSSL（JA3/JA4 与真机一致、无 ALPN）；`go` 用 Go 原生（排障 / 回滚）。`HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY`（含 `socks5://`）照常生效。需重启 |
+| `upstream.header_shape` | `true` | 出站头名大小写、发送顺序、`Connection` 头按官方真机（顺序表覆盖 chat / 生图 / report / busy / v3 config / refresh，其余路径保持原生）。需重启 |
+| `upstream.conn_per_account` | `true` | 连接池按账号隔离，同出口的不同账号不共用 TCP/TLS 连接。需重启 |
 | `upstream.dump_dir` | 空 | 诊断用：非空时每次 chat 把出站请求体 + 上游原始响应落到该目录（单文件封顶 8 MB，写盘失败不影响请求）。正文含用户提示词，用完即关。也可用环境变量 `WB2A_DUMP_UPSTREAM`；需重启 |
 | `upstream.dump_max_bytes` | `0` | 落盘文件里出站请求体片段上限，0 = 256 KB；长会话看不到 tools 时调大 |
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |

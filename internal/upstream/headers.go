@@ -208,7 +208,7 @@ func (c *Client) ChatHeaders(req *http.Request, a *auth.Auth, clientIP string, m
 	c.CommonHeaders(req, a)
 	// SDK 族差异头（UA / Accept / XRW / X-CodeBuddy-Request）。Accept 与官方 chat
 	// 一致只发 application/json，照样收 SSE 流。Accept-Encoding 由 CommonHeaders 按
-	// WireCompression 声明，SSE 由 decodeTransport 流式解压。
+	// WireCompression 声明，SSE 由 wireTransport 流式解压。
 	c.chatFamilyHeaders(req, a)
 	// AccessToken 加锁快照：keepalive 定时刷新会在 a.mu 内改写它，锁外直读构成数据竞争
 	// （见 auth.AccessTokenValue 注释）。
