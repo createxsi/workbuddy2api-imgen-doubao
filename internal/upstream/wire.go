@@ -7,6 +7,7 @@ package upstream
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -121,6 +122,11 @@ func officialConnectionValue(path string) string {
 	case "/v3/config":
 		return "close"
 	case "/v2/chat/completions", "/v2/chat/busy", "/v2/report", "/v2/plugin/auth/token/refresh":
+		return "keep-alive"
+	}
+	// 本仓独有、与 chat 同族（同域同头族）的链路：生图与 agenttool 检索 / 抓取，
+	// 与 chat 同发 keep-alive（由逐路径对拍门禁守护，见 official_parity_test.go）。
+	if strings.HasPrefix(path, "/v2/images/") || strings.HasPrefix(path, "/agenttool/") {
 		return "keep-alive"
 	}
 	return ""

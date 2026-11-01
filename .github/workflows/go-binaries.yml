@@ -36,6 +36,10 @@ jobs:
           go-version-file: go.mod
       # ubuntu runner 自带 node → panel 包的 JS 运行时冒烟测试（TestAppJSTopLevelSmoke）会真实执行
       - run: go test ./...
+      # 出站头门禁：生产函数出站字节 vs 桌面端真机夹具（含本仓独有路径同族对拍），差异非零即红。
+      # 改夹具必须同时给出抓包依据。上一步已跑过一次，这里单列便于在 CI 里看差异表。
+      - name: official-head parity
+        run: go test ./internal/upstream -run 'Parity' -v
 
   build:
     needs: test

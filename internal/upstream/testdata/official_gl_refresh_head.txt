@@ -1,0 +1,14 @@
+POST /v2/plugin/auth/token/refresh HTTP/1.1
+Accept: application/json, text/plain, */*
+Content-Type: application/json
+X-Domain: www.workbuddy.ai
+X-Refresh-Token: <REDACTED>
+X-Auth-Refresh-Source: plugin
+User-Agent: workbuddy-ai/5.9.4 workbuddy-ai/5.9.4 CLI/2.165.0
+X-Request-ID: 83bf6bd3885544188ffb214b7d437a0d
+X-Product: SaaS
+Authorization: Bearer <REDACTED>
+X-User-Id: 00000000-0000-4000-8000-000000000001
+Content-Length: 2
+Host: www.workbuddy.ai
+Connection: keep-alive
