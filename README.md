@@ -421,6 +421,7 @@ Claude Code 接入：`ANTHROPIC_BASE_URL=http://localhost:7863`（指到网关�
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |
 | `models.hidden` | `[]` | 模型黑名单：不对外暴露的模型。裸名=两域都藏；`"cn:xxx"`/`"global:xxx"`=只藏该域。`GET /v1/models` 列表过滤 + `POST /v1/chat/completions` 与 `/v1/images/*` 点名拒绝（400 `model_unavailable`），`/v1/images/models` 同样过滤。面板「模型黑名单」保存后热生效 |
 | `models.aliases` | `[]` | 模型映射 `["claude-sonnet-4=hy3"]`：客户端只能填固定模型名时落到真实模型。键大小写不敏感；裸名键两域生效，`cn:`/`global:` 前缀键只在该域生效；真实名不带前缀时沿用请求的域，带前缀则按前缀。映射在黑名单检查之前（不能绕过 `models.hidden`），出站/选号/粘性/账本用真实名，响应 `model` 回显客户端原发名。面板「模型映射」保存后热生效 |
+| `models.fallback` | `[]` | 模型级限流改道 `["deepseek-v4.1-flash=deepseek-v4-flash"]`：仅 6004 / 带「切换其他模型」的 6000 触发（14003 不触发），同账号换等价模型重试，不占换号次数；全池该模型都被配额锁时先试改道，仍不行再回 429。只在同域同模型族内生效（跨域、跨族条目忽略）；冷却记在实际请求的模型上，不写持久状态，原模型解封后自动回到原模型。面板「模型改道」保存后热生效 |
 | `prompt.mode` | `custom` | 系统提示词模式：`custom` = 网关用自有提示词替换客户端 system；`append` = 开头连续 system/developer 块后插网关提示词（既有消息逐字不动）；`passthrough` = 透传客户端原始 system（降级重试仍切中性提示词） |
 | `prompt.file` | 空 | 提示词文件路径；空 = 内置默认（约 2KB）；路径非空但不可读 → 启动报错 |
 | `upstash.url` / `upstash.token` | 空 | 空 = 纯内存模式（Noop 降级，功能照常） |
@@ -700,7 +701,7 @@ http://127.0.0.1:7863/panel/
 来源信息比 token 计数敏感（IP 属个人信息），因此由 `logging.request_client_info` 控制，**缺省开启、热生效、面板「配置 → 日志」可关**；关闭后归档与面板都不再出现来源字段（老归档里没有该字段的条目显示 `—`）。
 
 **配置热生效**：保存配置后，`api_key`、`cooldown.soft_rate`、`features.sanitize_blacklist_fingerprints`、
-`models.hidden`、`models.aliases`、`logging.request_client_info`、`pool.*`（熔断/在途/权重）、`schedule.*`（时点/开关/余额刷新间隔）、`update.*`**立即生效，无需重启**；
+`models.hidden`、`models.aliases`、`models.fallback`、`logging.request_client_info`、`pool.*`（熔断/在途/权重）、`schedule.*`（时点/开关/余额刷新间隔）、`update.*`**立即生效，无需重启**；
 涉及进程装配期依赖的字段（`listen`、`auth_dir`、`state_file`、`upstream.*`、`upstash.*`、`session_sticky.ttl`）
 保存后会提示"需重启进程生效"。配置写入采用「深合并且原子替换」：只更新面板表单覆盖的键，
 用户手写的未知键与其余字段原样保留。

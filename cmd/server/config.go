@@ -190,6 +190,9 @@ type Config struct {
 		// Aliases 模型映射："客户端名=真实模型名"。裸名键两域生效，cn:/global: 前缀键只在该域生效；
 		// 映射在黑名单检查之前完成（目标仍受 Hidden 约束）。面板保存后热生效。
 		Aliases []string `json:"aliases"`
+		// Fallback 模型级限流改道："原模型=等价模型"。仅 6004 / 带「切换其他模型」的 6000
+		// 触发，同账号换等价模型重试；只在同域同模型族内生效。空 = 关闭。面板保存后热生效。
+		Fallback []string `json:"fallback"`
 	} `json:"models"`
 
 	Prompt struct {

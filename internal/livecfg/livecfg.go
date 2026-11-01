@@ -16,12 +16,65 @@ import (
 
 // Snapshot 一次读取的不可变配置视图。
 type Snapshot struct {
-	APIKey               string        // 网关/面板共同鉴权密钥；空 = 不鉴权
-	SoftCooldown         time.Duration // 429 软冷却基数（<=0 时调用方回退内置默认）
-	SanitizeFingerprints bool          // 出站请求体指纹脱敏
-	RecordClientInfo     bool          // 请求日志是否记录调用来源（客户端 IP / UA）
+	APIKey               string              // 网关/面板共同鉴权密钥；空 = 不鉴权
+	SoftCooldown         time.Duration       // 429 软冷却基数（<=0 时调用方回退内置默认）
+	SanitizeFingerprints bool                // 出站请求体指纹脱敏
+	RecordClientInfo     bool                // 请求日志是否记录调用来源（客户端 IP / UA）
 	HiddenModels         map[string]struct{} // 精确隐藏的模型 id（已归一化为 "cn:x"/"global:x" 全量形式）；nil = 不隐藏
 	ModelAliases         map[string]string   // 客户端名 → 真实模型名（键 "cn:x"/"global:x" 小写）；nil = 不映射
+	ModelFallback        map[string]string   // 模型级限流改道表（键 "cn:x"/"global:x" 小写，值为同域裸名）；nil = 不改道
+}
+
+// NormalizeModelFallback 把 models.fallback 条目（"原模型=等价模型"）归一化为查找表。
+//   - 键带 cn:/global: 前缀只在该域生效，裸名键两域都登记；
+//   - 值可带前缀，但必须与键同域（不跨域改道），落表时存裸名；
+//   - 两端须同一模型族（ModelFamily 相同），防止误把请求改道到别家模型；
+//   - 无 "="、空键/空值、自我映射、跨域、跨族条目丢弃；重复键以后写为准。
+func NormalizeModelFallback(in []string) map[string]string {
+	out := make(map[string]string, len(in)*2)
+	for _, item := range in {
+		k, v, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		k = strings.ToLower(strings.TrimSpace(k))
+		v = strings.TrimSpace(v)
+		if k == "" || v == "" {
+			continue
+		}
+		realms := []string{"cn", "global"}
+		if prefix, bare, cut := strings.Cut(k, ":"); cut && (prefix == "cn" || prefix == "global") {
+			realms, k = []string{prefix}, bare
+		}
+		vRealm := ""
+		if prefix, bare, cut := strings.Cut(v, ":"); cut && (prefix == "cn" || prefix == "global") {
+			vRealm, v = prefix, bare
+		}
+		if k == "" || v == "" || strings.EqualFold(k, v) || ModelFamily(k) == "" || ModelFamily(k) != ModelFamily(v) {
+			continue
+		}
+		for _, r := range realms {
+			if vRealm != "" && vRealm != r {
+				continue
+			}
+			out[r+":"+k] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ModelFamily 模型族：小写模型名开头的连续字母段（deepseek-v4.1-flash → deepseek，
+// glm-5.2 → glm，hy3 → hy）。取不到字母段时返回空串。
+func ModelFamily(model string) string {
+	model = strings.ToLower(strings.TrimSpace(model))
+	end := 0
+	for end < len(model) && model[end] >= 'a' && model[end] <= 'z' {
+		end++
+	}
+	return model[:end]
 }
 
 // NormalizeModelAliases 把 aliases 条目（"客户端名=真实模型名"）归一化为查找表。

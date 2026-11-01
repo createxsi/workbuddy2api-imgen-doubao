@@ -272,7 +272,17 @@ func (p *Panel) overview(w http.ResponseWriter, r *http.Request) {
 		// model_locks 模型级限流全清单（哪些模型不能用、锁了几个号、还要锁多久）：
 		// 与 accounts 的账号池视图互补，前端「模型锁池」表直接渲染。无锁时为 null。
 		"model_locks": p.cfg.Pool.ModelLockView(),
+		// model_fallback 模型改道表（models.fallback 归一化后），前端在限流行标注「已路由至」。
+		"model_fallback": p.modelFallback(),
 	})
+}
+
+// modelFallback 当前生效的模型改道表（Live 为 nil 或未配置时为 nil）。
+func (p *Panel) modelFallback() map[string]string {
+	if p.cfg.Live == nil {
+		return nil
+	}
+	return p.cfg.Live.Load().ModelFallback
 }
 
 // logsHandler 返回日志环形缓冲快照（时间升序，含频道标记 chat/task/sys）。

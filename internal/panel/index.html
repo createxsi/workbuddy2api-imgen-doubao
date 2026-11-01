@@ -1185,6 +1185,9 @@ legend { font-size: 12px; color: var(--ink-3); font-weight: 600; padding-bottom:
               <label class="fld"><span class="lb">模型映射</span>
                 <input name="models_aliases" placeholder="claude-sonnet-4=hy3, gpt-5=global:hy3">
                 <span class="hint">逗号分隔的「客户端名=真实模型名」；真实名不带前缀时沿用请求的域；响应回显客户端原发名；目标仍受黑名单约束；保存即热生效</span></label>
+              <label class="fld"><span class="lb">模型改道</span>
+                <input name="models_fallback" placeholder="deepseek-v4.1-flash=deepseek-v4-flash">
+                <span class="hint">逗号分隔的「原模型=等价模型」；仅 6004 / 带「切换其他模型」的 6000 触发，同账号改用等价模型重试；只在同域同模型族内生效；留空 = 关闭；保存即热生效</span></label>
             </div>
             <div class="hint" style="margin-top:10px">Upstash Redis 镜像、凭证目录与状态文件路径需手工编辑配置文件（判为重启项）。</div>
           </div>

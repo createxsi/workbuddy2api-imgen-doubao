@@ -71,7 +71,9 @@
     "_comment": "hidden: 不对外暴露的模型黑名单。裸名=两域都藏；\"cn:xxx\"/\"global:xxx\"=只藏该域。/v1/models 列表过滤 + chat 点名拒绝，面板保存后热生效。",
     "hidden": [],
     "_comment_aliases": "aliases: 模型映射 \"客户端名=真实模型名\"。裸名键两域生效，cn:/global: 前缀键只在该域生效；真实名不带前缀时沿用请求的域。映射在黑名单检查之前，响应回显客户端原发名，面板保存后热生效。",
-    "aliases": []
+    "aliases": [],
+    "_comment_fallback": "fallback: 模型级限流改道 \"原模型=等价模型\"。仅 6004 / 带「切换其他模型」的 6000 触发，同账号换等价模型重试；只在同域同模型族内生效。空=关闭，面板保存后热生效。",
+    "fallback": []
   },
   "prompt": {
     "mode": "passthrough",

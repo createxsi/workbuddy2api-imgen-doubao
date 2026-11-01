@@ -67,3 +67,30 @@ func TestNormalizeModelAliases(t *testing.T) {
 		t.Fatal("空输入应为 nil")
 	}
 }
+
+func TestNormalizeModelFallback(t *testing.T) {
+	got := NormalizeModelFallback([]string{
+		"DeepSeek-V4.1-Flash = deepseek-v4-flash",
+		"global:hy3=hy4-preview",
+		"cn:glm-5.2=global:glm-5.3",
+		"glm-5.2=deepseek-v4-flash",
+		"kimi-k2=kimi-k2",
+		"broken",
+	})
+	want := map[string]string{
+		"cn:deepseek-v4.1-flash":     "deepseek-v4-flash",
+		"global:deepseek-v4.1-flash": "deepseek-v4-flash",
+		"global:hy3":                 "hy4-preview",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("got %v want %v", got, want)
+		}
+	}
+	if NormalizeModelFallback(nil) != nil {
+		t.Fatal("empty should be nil")
+	}
+}

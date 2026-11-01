@@ -70,6 +70,8 @@ type Config struct {
 	ModelsHidden []string
 	// ModelsAliases 模型映射原始条目（config models.aliases；Live 为 nil 时用）。
 	ModelsAliases []string
+	// ModelsFallback 模型级限流改道原始条目（config models.fallback；Live 为 nil 时用）。
+	ModelsFallback []string
 
 	// Usage 逐请求用量记录器（可选；nil = 不记录）。
 	// 在 recordAttempt 这一唯一汇聚点调用，因此流式/非流式、成功/失败都会计入，
@@ -96,7 +98,21 @@ func (h *Handler) loadLive() livecfg.Snapshot {
 		RecordClientInfo: h.cfg.RecordClientInfo,
 		HiddenModels:     livecfg.NormalizeHiddenModels(h.cfg.ModelsHidden),
 		ModelAliases:     livecfg.NormalizeModelAliases(h.cfg.ModelsAliases),
+		ModelFallback:    livecfg.NormalizeModelFallback(h.cfg.ModelsFallback),
 	}
+}
+
+// modelFallback 查 models.fallback：按 (realm, 小写裸名) 命中返回同域等价模型裸名。
+func (h *Handler) modelFallback(realm, bare string) string {
+	if bare == "" {
+		return ""
+	}
+	return h.loadLive().ModelFallback[realm+":"+strings.ToLower(bare)]
+}
+
+// isFallbackTrigger 只认模型级用量限流：6004，或带「切换其他模型」文案的 6000；14003 繁忙不算。
+func isFallbackTrigger(body string) bool {
+	return upstream.IsModelRateLimit(body) && !upstream.IsModelBusy(body)
 }
 
 // hiddenModel (realm, 裸名) 是否被 models.hidden 隐藏。对话列表、出图列表、chat 与出图入口
@@ -848,10 +864,45 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	chatMeta.TraceID = r.Header.Get("X-Trace-ID")
 
+	// models.fallback 模型级限流改道：bareModel 改指等价模型后，选号、出站 body、冷却、
+	// 账本一律按实际请求的模型记。fallbackSeen 防 A→B→A；retryUID 让改道后先回到同一账号。
+	fallbackSeen := map[string]bool{strings.ToLower(bareModel): true}
+	retryUID := ""
+	nextFallback := func() string {
+		to := h.modelFallback(realm, bareModel)
+		if to == "" || fallbackSeen[strings.ToLower(to)] || h.hiddenModel(realm, to) {
+			return ""
+		}
+		return to
+	}
+	applyFallback := func(to, why string) {
+		fallbackSeen[strings.ToLower(to)] = true
+		log.Printf("INFO: [server] model fallback: %s -> %s (%s)", bareModel, to, why)
+		bareModel = to
+		body = rewriteModel(body, to)
+		if h.cfg.Upstream != nil {
+			modelRate = h.cfg.Upstream.ModelRate(realm, bareModel)
+		}
+		// 流水行/归档按实际请求的模型记（与别名同口径），改道 INFO 行已记原模型。
+		if hasRealmPrefix(routeModel) {
+			st.model = realm + ":" + to
+		} else {
+			st.model = to
+		}
+	}
+
 	for i := 0; i < h.cfg.MaxRotate; i++ {
 		// 选号：粘性号优先（PickByUIDForModel 已校验该模型可用性 + 在途未满），否则普通轮换。
 		var acct *auth.Auth
-		if stickyUID != "" {
+		if retryUID != "" {
+			// 改道后先在刚撞限流的同一账号上试等价模型。
+			acct = h.cfg.Pool.PickByUIDForModel(retryUID, bareModel)
+			if acct != nil && realm != "" && acct.Realm() != realm {
+				acct = nil
+			}
+			retryUID = ""
+		}
+		if acct == nil && stickyUID != "" {
 			acct = h.cfg.Pool.PickByUIDForModel(stickyUID, bareModel)
 			if acct == nil || (realm != "" && acct.Realm() != realm) {
 				// 粘性号在当前模型不可用（冷却/占满/该模型被 6004 限额）或 realm 不符 → 解绑，
@@ -866,6 +917,12 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			acct = h.cfg.Pool.PickExcludingForRealm(tried, bareModel, realm)
 		}
 		if acct == nil {
+			// 全池该模型都被用量配额锁（6004/6000）：先试改道等价模型，不行再走下方 429。
+			if to := nextFallback(); to != "" && modelBlockAllQuota(h.cfg.Pool.ModelBlocked(bareModel)) {
+				applyFallback(to, "model quota-locked on every account")
+				i-- // 改道不占换号次数
+				continue
+			}
 			// 全池该模型只是被 14003「模型繁忙」的短冷却挡住时，先等它的最早解封
 			// （上限 busyWaitCap）再试，而不是把几秒的抖动直接变成客户端可见的断流：
 			// 上游繁忙是间歇的，多个号的短冷却叠在一起会把间歇放大成整段不可用。
@@ -1112,6 +1169,18 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			// 要求原文全量）+ Kind/RetryAfter（末端映射与冷却时长共用）。
 			lastErr = &upstream.Error{Kind: kind, Status: status, Msg: string(respBody), RetryAfter: uerr.RetryAfter}
 			h.applyErrorPolicy(acct.UID, kind, string(respBody), bareModel, uerr)
+			// 模型级用量限流且配置了等价模型：冷却已记在本次实际请求的模型上，同账号改道重试，
+			// 不占换号次数（14003 繁忙、普通 429 不改道）。
+			if isFallbackTrigger(string(respBody)) {
+				if to := nextFallback(); to != "" {
+					applyFallback(to, "upstream model usage limit")
+					delete(tried, acct.UID)
+					releaseHeld()
+					retryUID = acct.UID
+					i--
+					continue
+				}
+			}
 			fail(acct.UID)
 			// WAF IP 级 fail-fast（优先于 rotateBackoff 退避——IP 级拦截时退避无意义）：
 			// 该次 WAF 403 喂入 IP 级状态机，若激活（短窗多号命中，IP 被拦而非账号）

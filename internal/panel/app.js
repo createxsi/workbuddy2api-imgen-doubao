@@ -315,17 +315,30 @@ function disabledAge(at, now) {
   if (sec < 86400) return Math.floor(sec / 3600) + ' 小时前';
   return Math.floor(sec / 86400) + ' 天前';
 }
-function rateLimitRowsHtml(rows, now, uid) {
+function rateLimitRowsHtml(rows, now, uid, realm) {
   const list = Array.isArray(rows) ? rows.filter(row => row && row.model) : [];
   if (!list.length) return '';
+  const fbMap = overviewData && overviewData.model_fallback;
   return '<div class="rate-limits">' + list.map(row => {
     const m = rateLimitMeta(row, now);
+    // models.fallback 命中：该模型的请求已改道等价模型继续服务。
+    const to = row.kind === 'model_unavailable' ? '' : modelFallbackTarget(fbMap, realm, row.model);
+    if (to) m.detail += ' · ⤳ 已路由至 ' + to;
     // 手动解锁（仅清该账号上的该模型级冷却；账号级冷却/熔断不动）。
     const unlock = uid ? '<button class="xs ghost ml-unlock" data-a="unlock-model" data-u="' + esc(uid) +
       '" data-m="' + esc(row.model) + '" title="手动解锁：立刻让该账号重新服务 ' + esc(row.model) + '">解锁</button>' : '';
     return '<div class="rate-limit ' + (m.kind === 'model_unavailable' ? 'model-unavailable' : '') +
       '" title="' + esc(m.title) + '"><b>' + esc(m.model) + '</b><span>' + esc(m.detail) + '</span>' + unlock + '</div>';
   }).join('') + '</div>';
+}
+// modelFallbackTarget 按 (域, 模型) 查改道表（键 "cn:x"/"global:x" 小写；模型可带域前缀）。
+function modelFallbackTarget(map, realm, model) {
+  if (!map || !model) return '';
+  let r = realm === 'global' ? 'global' : 'cn';
+  let bare = String(model);
+  const i = bare.indexOf(':');
+  if (i > 0 && (bare.slice(0, i) === 'cn' || bare.slice(0, i) === 'global')) { r = bare.slice(0, i); bare = bare.slice(i + 1); }
+  return map[r + ':' + bare.toLowerCase()] || '';
 }
 
 function formatTokenCount(tokens) {
@@ -444,7 +457,7 @@ function renderAccounts(list) {
     const dHead = dk ? [dAge, dk.action].filter(Boolean).join(' · ') : '';
     const note = s.reason || dHead ? '<div class="hint" style="font-size:11.5px;color:var(--ink-3);margin-top:3px">' +
       (dHead ? '<div>' + esc(dHead) + '</div>' : '') + esc(s.reason || '') + '</div>' : '';
-    const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now(), s.uid);
+    const rateLimits = rateLimitRowsHtml(s.rate_limited_models, Date.now(), s.uid, s.realm);
     const short = s.uid.length > 16 ? s.uid.slice(0, 16) + '…' : s.uid;
     // 企业版不限量：上游 limitNum == -1，网关以 credits_total=-1 透出（见 upstream
     // enterpriseUnlimitedTotal）。此时剩余额度不参与展示，直接标「不限」。
@@ -1229,10 +1242,10 @@ const CFG_MAP = {
   sanitize_blacklist_fingerprints: ['features', 'sanitize_blacklist_fingerprints'],
   session_sticky_enabled: ['session_sticky', 'enabled'],
   request_client_info: ['logging', 'request_client_info'],
-  models_hidden: ['models', 'hidden'], models_aliases: ['models', 'aliases'],
+  models_hidden: ['models', 'hidden'], models_aliases: ['models', 'aliases'], models_fallback: ['models', 'fallback'],
 };
 // 列表型文本字段：空串 = 显式清空（发空数组），否则删不掉最后一个条目。
-const LIST_CFG = { models_hidden: /[,，\s]+/, models_aliases: /[,，]+/ };
+const LIST_CFG = { models_hidden: /[,，\s]+/, models_aliases: /[,，]+/, models_fallback: /[,，]+/ };
 /* 「覆盖型」文本字段：空串本身是有意义的取值（= 回落到内置默认），必须照发。
  *
  * 其余文本字段保持「空 = 不下发」的既有语义——那是防误清空的保护，不是 bug：

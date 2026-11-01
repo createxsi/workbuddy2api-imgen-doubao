@@ -1008,3 +1008,39 @@ process.stdout.write(JSON.stringify({
 			strings.TrimSpace(string(out)), want)
 	}
 }
+
+// 限流行「已路由至」：按账号域 + 模型（可带域前缀）查改道表。
+func TestAppJSModelFallbackTarget(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	script := `const fs = require('fs');
+const vm = require('vm');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const start = src.indexOf('function modelFallbackTarget(');
+if (start < 0) throw new Error('modelFallbackTarget not found');
+const end = src.indexOf('\n}\n', start) + 3;
+const ctx = { String };
+vm.createContext(ctx);
+vm.runInContext("'use strict';\n" + src.slice(start, end) + '\nthis.f=modelFallbackTarget;', ctx);
+const map = { 'cn:deepseek-v4.1-flash': 'deepseek-v4-flash', 'global:hy3': 'hy4-preview' };
+process.stdout.write(JSON.stringify([
+  ctx.f(map, 'cn', 'DeepSeek-V4.1-Flash'), ctx.f(map, 'global', 'deepseek-v4.1-flash'),
+  ctx.f(map, 'global', 'hy3'), ctx.f(map, '', 'global:hy3'), ctx.f(null, 'cn', 'x'),
+]));`
+	f, err := os.CreateTemp(t.TempDir(), "fallback-*.cjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(script)
+	f.Close()
+	out, err := exec.Command(node, f.Name(), "app.js").CombinedOutput()
+	if err != nil {
+		t.Fatalf("node: %v\n%s", err, out)
+	}
+	const want = `["deepseek-v4-flash","","hy4-preview","hy4-preview",""]`
+	if strings.TrimSpace(string(out)) != want {
+		t.Fatalf("got %s want %s", out, want)
+	}
+}
