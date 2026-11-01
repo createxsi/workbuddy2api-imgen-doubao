@@ -143,11 +143,9 @@ type Config struct {
 	} `json:"global"`
 
 	CN struct {
-		// ChatBase 国内版 chat/模型目录上游 base 覆盖；空 = 回落内置默认
-		// https://copilot.tencent.com（internal/upstream.New 的 ChatBaseCN）。
-		// copilot.tencent.com 对海外出口（如 Clash 全局 + TUN）的 TLS 握手直接复位，
-		// CN 模型目录与对话全部 EOF；官方 WorkBuddy 桌面端已改用 https://www.workbuddy.cn，
-		// 该域海外出口可达，/v2/chat/completions、/v3/config 与模型目录路径同构。
+		// ChatBase 国内版 chat/模型目录上游 base 覆盖；空 = 内置默认
+		// https://www.workbuddy.cn（官方桌面端 endpoint）。需要回退旧入口时填
+		// https://copilot.tencent.com（官方备选入口，对部分海外出口握手复位）。
 		ChatBase string `json:"chat_base"`
 	} `json:"cn"`
 

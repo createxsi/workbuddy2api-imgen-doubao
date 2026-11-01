@@ -812,9 +812,11 @@ type Client struct {
 func New() *Client {
 	tr := newTransport()
 	c := &Client{
-		HTTP:          &http.Client{Timeout: 120 * time.Second, Transport: tr},
-		ChatHTTP:      &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
-		ChatBaseCN:    "https://copilot.tencent.com",
+		HTTP:     &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		ChatHTTP: &http.Client{Timeout: 0, Transport: tr}, // 无总时长；首字节由 ResponseHeaderTimeout 管
+		// ChatBaseCN 取官方桌面端 endpoint www.workbuddy.cn；copilot.tencent.com 是官方
+		// 网络故障切换里的备选入口（且对部分海外出口握手复位）。cn.chat_base 可覆盖回退。
+		ChatBaseCN:    "https://www.workbuddy.cn",
 		BillingBaseCN: "https://www.codebuddy.cn",
 		WebBaseCN:     "https://www.workbuddy.cn",
 		// GlobalEnabled 缺省 true（与 config global.enabled 缺省 true 一致；纯 CN 部署行为不变：

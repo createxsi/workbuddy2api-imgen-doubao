@@ -118,7 +118,7 @@ WorkBuddy2API 是一个自托管的 **OpenAI 兼容反向代理网关**，将腾
 
 ### 实现原理（简述）
 
-任务计分走 `/v2/report` 行为上报，但**不同任务认不同客户端指纹**：CLI 指纹（`www.codebuddy.cn`）、桌面指纹（`copilot.tencent.com` + `WorkBuddy/5.5.6` UA + `workbuddy-desktop` 事件族）、web 指纹（`www.workbuddy.cn` + `x-client-platform: web`）。网关为每类任务构造对应指纹的判据事件链（`internal/upstream/desktop.go`）；专家类任务额外要求真实专家 id 与真实对话回执（`internal/upstream/streak.go` 之外的 expert 序列）。上报 200 ≠ 计分——面板在执行后轮询任务进度，达标即自动调用 Web 域领奖接口。
+任务计分走 `/v2/report` 行为上报，但**不同任务认不同客户端指纹**：CLI 指纹（`www.codebuddy.cn`）、桌面指纹（chat 域 + 桌面端 UA + `workbuddy-desktop` 事件族）、web 指纹（`www.workbuddy.cn` + `x-client-platform: web`）。网关为每类任务构造对应指纹的判据事件链（`internal/upstream/desktop.go`）；专家类任务额外要求真实专家 id 与真实对话回执（`internal/upstream/streak.go` 之外的 expert 序列）。上报 200 ≠ 计分——面板在执行后轮询任务进度，达标即自动调用 Web 域领奖接口。
 
 > ⚠️ 行为事件按天幂等：重复点「一键完成」不会重复扣资源，已达标的任务自动跳过。
 
@@ -222,7 +222,7 @@ flowchart LR
 
     P -. "读凭证 (0600)" .-> AUTH[("auths/*.json")]
     P -. "状态镜像" .-> REDIS[("Upstash Redis\n可选")]
-    U -->|"chat/completions (SSE)"| CB["CodeBuddy\ncopilot.tencent.com"]
+    U -->|"chat/completions (SSE)"| CB["CodeBuddy\nwww.workbuddy.cn"]
     U -->|"billing / auth / growth"| CB
 ```
 
@@ -760,7 +760,8 @@ http://127.0.0.1:7863/panel/
 
 上游接口均为 CodeBuddy 官方 CLI / 插件使用的**非公开 / 逆向接口**，未见公开 API 文档；路径及 Host 以代码内常量为准（见文末出处表）。两类 base：
 
-- **`copilot.tencent.com`**：聊天补全（SSE）、token 刷新、OAuth、模型列表、growth 域（旅行 / streak）
+- **`www.workbuddy.cn`**（默认，可用 `cn.chat_base` 改回 `copilot.tencent.com`）：聊天补全（SSE）、token 刷新、模型列表、growth 域（旅行 / streak）
+- **`copilot.tencent.com`**：设备码登录（OAuth）
 - **`www.codebuddy.cn`**：每日签到、余额查询、活跃上报
 
 | 相对路径（绝对路径见出处表） | 方法 | 用途 |
