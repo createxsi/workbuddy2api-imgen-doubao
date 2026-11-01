@@ -772,7 +772,7 @@ http://127.0.0.1:7863/panel/
 | `billing/meter/daily-checkin` | POST | 每日签到 |
 | `billing/meter/get-user-resource` | POST | 余额查询 |
 | `report` | POST | 对话活跃上报（`chat_request_send` 事件数组，必须含 `userId`；点亮连登 / 解锁领养） |
-| `plugin/auth/state?platform=CLI` | POST | OAuth 取授权 URL |
+| `plugin/auth/state?platform=workbuddy`（国际版 `workbuddy-ai`） | POST | OAuth 取授权 URL |
 | `plugin/auth/token?state=` | GET | OAuth 轮询取 token |
 | `plugin/login/account?state=` | GET | OAuth 取账号信息 |
 | `activity/growth/buddy/agreement` | POST | 猫猫旅行：同意协议（幂等） |
@@ -789,7 +789,7 @@ http://127.0.0.1:7863/panel/
 | `activity/growth/tasks/accept` | POST | 接受任务（`{"task_codes":[...]}`） |
 | `activity/growth/tasks/<task_code>/claim` | POST | **领取任务奖励**（任务码在路径、无 body；**Web 域 `www.workbuddy.cn`**，非 CLI 域——这是领奖能成功的关键） |
 
-出站请求统一携带 `CLI/2.63.2 CodeBuddy/2.63.2` UA（可被 `upstream.user_agent` 覆盖）；聊天请求带账号头（`X-User-Id` 等），**永不携带 `X-Refresh-Token`**（该头只出现在 token 刷新请求）。领奖请求额外带 `x-client-platform: web` 与 workbuddy.cn 的 Origin/Referer。
+出站 UA 默认对齐桌面端（chat 为 `WorkBuddy/<ver> <brand>/<ver> CLI/<ver>`，其余 REST 与登录链路为 RPC 族 `<brand>/<ver> <brand>/<ver> CLI/<ver>`，可被 `upstream.user_agent` 覆盖）；聊天请求带账号头（`X-User-Id` 等），**永不携带 `X-Refresh-Token`**（该头只出现在 token 刷新请求）。领奖请求额外带 `x-client-platform: web` 与 workbuddy.cn 的 Origin/Referer。
 
 ## 请求级日志
 
