@@ -11,10 +11,12 @@ package panel
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -48,8 +50,33 @@ func loginEndpoints(realm string) (state, token, account, origin string) {
 		originRefererCN
 }
 
-// loginHTTP 设备授权专用 client：短超时、无 cookie（每请求携带 state，无会话态）。
-var loginHTTP = &http.Client{Timeout: 30 * time.Second}
+// loginHTTP 设备授权专用 client：无 cookie（每请求携带 state，无会话态）。
+//
+// 不用默认 transport：默认会经 ALPN 协商出 HTTP/2，网络抖动留下的半死 h2 连接被复用时
+// 会一直等响应头直到 30s 总超时——表现为拿不到授权链接、轮询检测不到已完成的登录。
+// 空 TLSNextProto 禁 h2（只设 ForceAttemptHTTP2=false 无效），并给各阶段单独超时，
+// 让单次尝试尽早失败，配合 doJSON 的传输层重试。代理沿用 HTTP(S)_PROXY 环境变量。
+var loginHTTP = &http.Client{
+	Timeout: 30 * time.Second,
+	Transport: &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   8 * time.Second,
+			KeepAlive: 15 * time.Second,
+		}).DialContext,
+		TLSNextProto:          make(map[string]func(string, *tls.Conn) http.RoundTripper),
+		TLSHandshakeTimeout:   8 * time.Second,
+		ResponseHeaderTimeout: 15 * time.Second,
+		MaxIdleConns:          16,
+		MaxIdleConnsPerHost:   8,
+		IdleConnTimeout:       60 * time.Second,
+	},
+}
+
+// loginAttempts 登录步骤的传输层重试次数：只对「一个 HTTP 响应都没拿到」的失败重试。
+// 三步都可安全重发（auth/state 重签 state；token/account 是只读查询）。已拿到响应的
+// 业务错误或 HTTP 4xx/5xx 不重试，避免拖慢轮询。
+const loginAttempts = 3
 
 func commonHeaders(req *http.Request, origin string) {
 	req.Header.Set("Content-Type", "application/json")
@@ -84,9 +111,30 @@ type apiEnvelope struct {
 	Data json.RawMessage `json:"data"`
 }
 
-// doJSON 发一次 JSON 请求并解信封。origin 为 Origin/Referer 基础域（随 realm 切）。
-func doJSON(method, fullURL, bearer string, body io.Reader, origin string) (json.RawMessage, int, error) {
-	req, err := http.NewRequest(method, fullURL, body)
+// doJSON 发 JSON 请求并解信封，纯传输失败按 loginAttempts 重试。
+// origin 为 Origin/Referer 基础域（随 realm 切）；body 用 []byte 以便重放。
+func doJSON(method, fullURL, bearer string, body []byte, origin string) (json.RawMessage, int, error) {
+	var lastErr error
+	for attempt := 0; attempt < loginAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 400 * time.Millisecond)
+		}
+		data, status, err := doJSONOnce(method, fullURL, bearer, body, origin)
+		if err == nil || status != 0 {
+			return data, status, err
+		}
+		lastErr = err
+	}
+	return nil, 0, lastErr
+}
+
+// doJSONOnce 单次尝试。
+func doJSONOnce(method, fullURL, bearer string, body []byte, origin string) (json.RawMessage, int, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequest(method, fullURL, rdr)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -128,7 +176,7 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	epState, _, _, origin := loginEndpoints(realm)
-	data, status, err := doJSON(http.MethodPost, epState, "", bytes.NewReader([]byte("{}")), origin)
+	data, status, err := doJSON(http.MethodPost, epState, "", []byte("{}"), origin)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, fmt.Sprintf("auth state (upstream %d): %v", status, err))
 		return
