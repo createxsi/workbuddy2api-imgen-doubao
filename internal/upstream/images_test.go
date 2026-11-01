@@ -615,10 +615,10 @@ func TestImageHeadersVersionMatchesChat(t *testing.T) {
 	}
 	g := &auth.Auth{UID: "g", Domain: "www.workbuddy.ai"}
 	g.BackfillRealm()
-	if v := c.clientVersion(g); v != "5.8.4" {
-		t.Errorf("global version = %s want 5.8.4", v)
+	if v := c.clientVersion(g); v != "5.9.4" {
+		t.Errorf("global version = %s want 5.9.4", v)
 	}
-	if v := c.clientVersion(&auth.Auth{UID: "c"}); v != "5.8.3" {
-		t.Errorf("cn version = %s want 5.8.3", v)
+	if v := c.clientVersion(&auth.Auth{UID: "c"}); v != "5.9.3" {
+		t.Errorf("cn version = %s want 5.9.3", v)
 	}
 }

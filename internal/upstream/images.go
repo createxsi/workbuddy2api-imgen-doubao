@@ -179,13 +179,8 @@ func BuildImageUpstreamBody(req *ImageGenRequest, model string) ([]byte, error) 
 // 但 Accept 保持 application/json（生图是非流式；ChatHeaders 的 event-stream 不适用）。
 func (c *Client) ImageHeaders(req *http.Request, a *auth.Auth, clientIP string) {
 	c.CommonHeaders(req, a)
-	// 与 ChatHeaders 同口径剥离客户端 chat 出站从不发的头（见 ChatHeaders 注释）。
-	req.Header.Del("Origin")
-	req.Header.Del("Referer")
-	req.Header.Del("Accept-Language")
-	req.Header.Del("X-Machine-ID")
-	req.Header.Del("X-Session-ID")
-	req.Header.Set("Accept", "application/json")
+	// 与 ChatHeaders 同属 SDK 族（UA / Accept / XRW / X-CodeBuddy-Request）。
+	c.chatFamilyHeaders(req, a)
 	if at := a.AccessTokenValue(); at != "" {
 		req.Header.Set("Authorization", "Bearer "+at)
 	} else {
