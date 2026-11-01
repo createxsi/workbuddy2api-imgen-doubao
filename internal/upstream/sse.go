@@ -709,6 +709,19 @@ func StreamHint(w http.ResponseWriter, r io.Reader, hintFn func(string) string, 
 			}
 			return 1, nil
 		}
+		// 流内失败帧（HTTP 200 内嵌顶层 {code,msg}，无 choices）：白名单会把 code/msg
+		// 剥成空 chunk，客户端只看到「干净地停止」。如实改写成标准 error 帧透出，并同样
+		// 交给观察者做账号处置。首帧形态已由 VetoHead 在写头之前否决，这里只剩中途出现的。
+		if code, msg, ok := StreamErrorFrame(obj); ok {
+			ep := streamErrorPayload(code, msg, payload)
+			if o.onErrorFrame != nil {
+				o.onErrorFrame(ep)
+			}
+			if werr := writeRaw(ep); werr != nil {
+				return 0, werr
+			}
+			return 1, nil
+		}
 		for _, ch := range repairFrame(obj) {
 			if werr := writeChunk(ch, payload); werr != nil {
 				return 0, werr

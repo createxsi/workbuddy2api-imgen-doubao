@@ -1054,9 +1054,45 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			}
 			continue
 		}
-		if status >= 400 {
+		// 首帧否决（见 upstream.VetoHead）：上游 200 开流但第一个 data 帧就是失败帧
+		// （error 帧 / 200 内嵌 {code,msg}，如 6004、11140、6021），在协议桥写头与标记
+		// 还原之前识别，按普通上游错误进下方分类链（罚号 / 换号 / 改道 / 透传）——
+		// 这次尝试对客户端无痕，不再以「200 + error 帧」透出。
+		headVetoed := false
+		if status < 400 && rc != nil {
+			probed, verr := upstream.VetoHead(rc)
+			if hv, ok := upstream.IsHeadVeto(verr); ok {
+				rc.Close()
+				headVetoed = true
+				if hv.Payload == "" {
+					// 零有效帧：上游缺陷不是账号的问题（不罚号），换号值得一试。
+					recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
+					st.status = http.StatusServiceUnavailable
+					st.outcome = reqlog.OutcomeStreamError
+					lastErr = verr
+					fail(acct.UID)
+					log.Printf("WARN: [server] chat acct=%s model=%s: empty upstream stream before first byte (rotating)", logfmt.Label(acct.UID, acct.Nickname), bareModel)
+					if !rotateBackoff(i, r.Context()) {
+						break
+					}
+					continue
+				}
+				log.Printf("WARN: [server] chat acct=%s model=%s: upstream error frame before first byte payload=%s (rotating)",
+					logfmt.Label(acct.UID, acct.Nickname), bareModel, logfmt.Truncate(hv.Payload, 200))
+				status = http.StatusOK
+				respBody = []byte(hv.Payload)
+				uerr = &upstream.Error{Kind: upstream.FrameKind(hv.Payload), Status: http.StatusOK, Msg: hv.Payload}
+			} else {
+				rc = readCloser{Reader: probed, Closer: rc}
+			}
+		}
+		if status >= 400 || headVetoed {
 			recordAttempt(acct.UID, pool.TokenUsageDelta{}, 0, false, attemptStarted, 0)
 			st.status = status
+			if headVetoed {
+				st.status = http.StatusServiceUnavailable
+				st.outcome = reqlog.OutcomeStreamError
+			}
 			var kind upstream.ErrKind
 			if uerr != nil {
 				kind = uerr.Kind
@@ -1507,7 +1543,10 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIErrorHint(w, status, code, msg, hint)
 	}
 	st.status = status
-	st.outcome = reqlog.OutcomeHTTPError
+	// 首帧否决后轮转耗尽：客户端拿到的错误只是「没能提交流」的结果，观测保持 stream_error。
+	if st.outcome != reqlog.OutcomeStreamError {
+		st.outcome = reqlog.OutcomeHTTPError
+	}
 }
 
 // maxRetryAfterSec Retry-After 上报上限（10 分钟）：客户端普遍按该头直接睡眠且不设
@@ -2040,4 +2079,10 @@ func (h *Handler) handleGatewayUnauthorized(uid string) bool {
 	h.cfg.Pool.CooldownSoftRate(uid, jitterDur(wafCooldownBase), time.Time{}, "gateway 401 (refresh ok)")
 	log.Printf("INFO: [server] acct=%s: 网关 401 但 refresh 成功 → 瞬时拦截，软冷却后回池", logfmt.Label(a.UID, a.Nickname))
 	return true
+}
+
+// readCloser 组合首帧探测后的回放 reader 与原上游 body 的 Close。
+type readCloser struct {
+	io.Reader
+	io.Closer
 }

@@ -124,10 +124,22 @@ func FrameKind(payload string) ErrKind {
 	var f struct {
 		Error struct {
 			Message string `json:"message"`
+			Code    any    `json:"code"`
 		} `json:"error"`
 	}
 	if json.Unmarshal([]byte(payload), &f) != nil || f.Error.Message == "" {
 		return ErrNone
+	}
+	// 帧里带业务码（含 200 内嵌 {code,msg} 改写来的帧）：整帧分类——11128 / 11140 同为
+	// "request illegal"、6020/6021 排队等都要靠 code 分流，只看 message 会误判。
+	if f.Error.Code != nil {
+		k := Classify(http.StatusBadRequest, payload)
+		// 流内 11140「request illegal」实测是安全策略拦截（HTTP 200 内嵌），不是 HTTP 层
+		// 的账号封禁形态：归通用业务错误（换号、不罚号），不走硬禁用。
+		if k == ErrAccountFault && IsAccountRestricted(payload) {
+			return ErrClient
+		}
+		return k
 	}
 	return Classify(http.StatusBadRequest, f.Error.Message)
 }
