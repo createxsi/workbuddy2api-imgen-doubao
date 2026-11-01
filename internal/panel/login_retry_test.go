@@ -20,7 +20,7 @@ func TestLoginDoJSONRetriesTransportOnly(t *testing.T) {
 		_, _ = w.Write([]byte(`{"code":0,"data":{"ok":true}}`))
 	}))
 	defer srv.Close()
-	data, status, err := doJSON(http.MethodPost, srv.URL, "", []byte("{}"), "https://example.invalid")
+	data, status, err := doJSON(http.MethodPost, srv.URL, nil, []byte("{}"))
 	if err != nil || status != 200 || string(data) != `{"ok":true}` {
 		t.Fatalf("want retry success, got %s %d %v", data, status, err)
 	}
@@ -34,7 +34,7 @@ func TestLoginDoJSONRetriesTransportOnly(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer srv2.Close()
-	if _, status, err := doJSON(http.MethodGet, srv2.URL, "", nil, "https://example.invalid"); err == nil || status != 502 {
+	if _, status, err := doJSON(http.MethodGet, srv2.URL, nil, nil); err == nil || status != 502 {
 		t.Fatalf("want 502 error, got %d %v", status, err)
 	}
 	if atomic.LoadInt32(&m) != 1 {

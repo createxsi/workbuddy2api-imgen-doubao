@@ -23,31 +23,27 @@ import (
 	"time"
 
 	"github.com/linguo2625469/workbuddy2api-panel/internal/auth"
+	"github.com/linguo2625469/workbuddy2api-panel/internal/upstream"
 )
 
 const (
-	upstreamBaseCN      = "https://copilot.tencent.com"
-	upstreamBaseGlobal  = "https://www.workbuddy.ai"
-	clientUA            = "CLI/2.63.2 CodeBuddy/2.63.2"
-	originRefererCN     = "https://www.codebuddy.cn"
-	originRefererGlobal = "https://www.workbuddy.ai"
+	upstreamBaseCN     = "https://copilot.tencent.com"
+	upstreamBaseGlobal = "https://www.workbuddy.ai"
 )
 
-// loginEndpoints 按 realm 返回设备授权三端点（auth/state、token、account）+ Origin。
-// realm=="global" → 国际版（workbuddy.ai 同域）；cn/非法/缺省 → CN（零回归）。
-func loginEndpoints(realm string) (state, token, account, origin string) {
-	if realm == "global" {
-		base := upstreamBaseGlobal
-		return base + "/v2/plugin/auth/state?platform=CLI",
-			base + "/v2/plugin/auth/token?state=",
-			base + "/v2/plugin/login/account?state=",
-			originRefererGlobal
-	}
+// loginEndpoints 按 realm 返回设备授权三端点（auth/state、token、account）。
+// realm=="global" → 国际版（workbuddy.ai）；cn/非法/缺省 → CN。
+// platform 取桌面端分发包口径（CN workbuddy / global workbuddy-ai），见 upstream.LoginPlatform。
+func loginEndpoints(realm string) (state, token, account string) {
 	base := upstreamBaseCN
-	return base + "/v2/plugin/auth/state?platform=CLI",
+	if realm == "global" {
+		base = upstreamBaseGlobal
+	} else {
+		realm = "cn"
+	}
+	return base + "/v2/plugin/auth/state?platform=" + upstream.LoginPlatform(realm),
 		base + "/v2/plugin/auth/token?state=",
-		base + "/v2/plugin/login/account?state=",
-		originRefererCN
+		base + "/v2/plugin/login/account?state="
 }
 
 // loginHTTP 设备授权专用 client：无 cookie（每请求携带 state，无会话态）。
@@ -78,15 +74,6 @@ var loginHTTP = &http.Client{
 // 业务错误或 HTTP 4xx/5xx 不重试，避免拖慢轮询。
 const loginAttempts = 3
 
-func commonHeaders(req *http.Request, origin string) {
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	req.Header.Set("Origin", origin)
-	req.Header.Set("Referer", origin+"/")
-	req.Header.Set("User-Agent", clientUA)
-}
-
 // validUID 校验上游返回的 uid 是否可安全用于拼文件名。
 // 只放行字母、数字、下划线、连字符（腾讯侧 uid 实测为 UUID 形态），
 // 长度上限 64 兜底异常超长串；拒绝 . / \ 等路径字符与空串。
@@ -112,14 +99,14 @@ type apiEnvelope struct {
 }
 
 // doJSON 发 JSON 请求并解信封，纯传输失败按 loginAttempts 重试。
-// origin 为 Origin/Referer 基础域（随 realm 切）；body 用 []byte 以便重放。
-func doJSON(method, fullURL, bearer string, body []byte, origin string) (json.RawMessage, int, error) {
+// headers 为该端点的完整出站头（upstream.LoginHeaders）；body 用 []byte 以便重放。
+func doJSON(method, fullURL string, headers map[string]string, body []byte) (json.RawMessage, int, error) {
 	var lastErr error
 	for attempt := 0; attempt < loginAttempts; attempt++ {
 		if attempt > 0 {
 			time.Sleep(time.Duration(attempt) * 400 * time.Millisecond)
 		}
-		data, status, err := doJSONOnce(method, fullURL, bearer, body, origin)
+		data, status, err := doJSONOnce(method, fullURL, headers, body)
 		if err == nil || status != 0 {
 			return data, status, err
 		}
@@ -129,7 +116,7 @@ func doJSON(method, fullURL, bearer string, body []byte, origin string) (json.Ra
 }
 
 // doJSONOnce 单次尝试。
-func doJSONOnce(method, fullURL, bearer string, body []byte, origin string) (json.RawMessage, int, error) {
+func doJSONOnce(method, fullURL string, headers map[string]string, body []byte) (json.RawMessage, int, error) {
 	var rdr io.Reader
 	if body != nil {
 		rdr = bytes.NewReader(body)
@@ -138,9 +125,8 @@ func doJSONOnce(method, fullURL, bearer string, body []byte, origin string) (jso
 	if err != nil {
 		return nil, 0, err
 	}
-	commonHeaders(req, origin)
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
+	for k, v := range headers {
+		req.Header.Set(k, v)
 	}
 	resp, err := loginHTTP.Do(req)
 	if err != nil {
@@ -175,8 +161,8 @@ func (p *Panel) loginStart(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	epState, _, _, origin := loginEndpoints(realm)
-	data, status, err := doJSON(http.MethodPost, epState, "", []byte("{}"), origin)
+	epState, _, _ := loginEndpoints(realm)
+	data, status, err := doJSON(http.MethodPost, epState, upstream.LoginHeaders(realm, upstream.LoginState, "", upstream.LoginDeviceToken()), []byte("{}"))
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, fmt.Sprintf("auth state (upstream %d): %v", status, err))
 		return
@@ -216,10 +202,10 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown or expired state（请重新发起添加账号）")
 		return
 	}
-	_, epToken, epAcct, origin := loginEndpoints(sess.realm)
+	_, epToken, epAcct := loginEndpoints(sess.realm)
 
 	// auth/token 是权威登录状态端点：pending 时业务 code 非 0（"login ing"）。
-	tokRaw, _, err := doJSON(http.MethodGet, epToken+state, "", nil, origin)
+	tokRaw, _, err := doJSON(http.MethodGet, epToken+state, upstream.LoginHeaders(sess.realm, upstream.LoginToken, "", ""), nil)
 	if err != nil {
 		// pending / 未完成：面板前端继续轮询。
 		writeJSON(w, http.StatusOK, map[string]any{"done": false, "message": err.Error()})
@@ -242,7 +228,7 @@ func (p *Panel) loginPoll(w http.ResponseWriter, r *http.Request) {
 		EnterpriseID string `json:"enterpriseId"`
 		Nickname     string `json:"nickname"`
 	}
-	if acctRaw, _, err := doJSON(http.MethodGet, epAcct+state, tok.AccessToken, nil, origin); err == nil {
+	if acctRaw, _, err := doJSON(http.MethodGet, epAcct+state, upstream.LoginHeaders(sess.realm, upstream.LoginAccount, tok.AccessToken, ""), nil); err == nil {
 		_ = json.Unmarshal(acctRaw, &acct)
 	}
 	if acct.UID == "" {
