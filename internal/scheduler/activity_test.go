@@ -611,19 +611,20 @@ func TestCheckinStillSkipsGlobal(t *testing.T) {
 
 	s.RunCheckinNow()
 
-	// 签到/成长域对 global 零调用；billing 域礼包/补偿允许（按 realm 路由到国际版 base）。
+	// 签到/成长域对 global 零调用；billing 域新手礼包允许（按 realm 路由到国际版 base）；
+	// 补偿活动已结束，不再调用。
 	mu.Lock()
 	defer mu.Unlock()
 	var benefits int
 	for _, path := range paths {
 		switch {
-		case strings.Contains(path, "/billing/meter/claim-gift"), strings.Contains(path, "/billing/meter/claim-compensation"):
+		case strings.Contains(path, "/billing/meter/claim-gift"):
 			benefits++
 		default:
 			t.Errorf("global 不应发起签到/成长域调用: %s", path)
 		}
 	}
-	if benefits != 2 {
-		t.Errorf("global 礼包/补偿调用=%d want 2 (paths=%v)", benefits, paths)
+	if benefits != 1 {
+		t.Errorf("global 礼包调用=%d want 1 (paths=%v)", benefits, paths)
 	}
 }

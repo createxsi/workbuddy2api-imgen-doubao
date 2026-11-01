@@ -31,7 +31,7 @@ func (s *Scheduler) RunStreakBonusNow() {
 			continue // 企业版门控：无成长体系（/activity/growth/streak 上游一律 403）
 		}
 		if a.IsGlobal() {
-			// global 无 CN 成长体系（连登/补签/兑换/抽奖），但 billing 域的礼包/补偿
+			// global 无 CN 成长体系（连登/补签/兑换/抽奖），但 billing 域的新手礼包
 			// 按 realm 路由到国际版 base，同样可领。
 			s.claimBenefits(a)
 			continue
@@ -40,11 +40,11 @@ func (s *Scheduler) RunStreakBonusNow() {
 	}
 }
 
-// streakBonusAccount 单账号：补签保连登 → 礼包/补偿 → 兑换所有已解锁档位 → 抽完所有 chances。
+// streakBonusAccount 单账号：补签保连登 → 新手礼包 → 兑换所有已解锁档位 → 抽完所有 chances。
 func (s *Scheduler) streakBonusAccount(a *auth.Auth) {
 	// 0. 补签保连登：昨日漏签且有补签卡则补上（连续天数一断就要重攒 7 天）。
 	s.makeupYesterday(a)
-	// 0.5 礼包/补偿（每号一次，无则业务错误静默跳过）。
+	// 0.5 新手礼包（每号一次，无则业务错误静默跳过）。
 	s.claimBenefits(a)
 
 	full, err := s.cfg.Upstream.GrowthStreakFull(a)
@@ -117,15 +117,13 @@ func (s *Scheduler) makeupYesterday(a *auth.Auth) {
 	log.Printf("streak-bonus %s: ★ 已用补签卡补签 %s（保连登）", logfmt.Label(a.UID, a.Nickname), yesterday)
 }
 
-// claimBenefits 礼包 / 活动补偿（billing 域，有则领，无则业务错误静默跳过）。
+// claimBenefits 新手礼包（billing 域，有则领，无则业务错误静默跳过）。
+// 官方补偿活动已于 2026-10 结束，不再每轮调 claim-compensation（只会白打上游）。
 //
 // 只有回执里真带了 credit（>0）才记「到账」：上游对「已领过 / 本次无发放」可能回
 // code=0 且不带 credit 字段（解析为 0），那不是到账，记成「🎊 +0c」只会制造假账。
 func (s *Scheduler) claimBenefits(a *auth.Auth) {
 	if credit, err := s.cfg.Upstream.ClaimGift(a); err == nil && credit > 0 {
 		log.Printf("streak-bonus %s: 🎊 新手礼包 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
-	}
-	if credit, err := s.cfg.Upstream.ClaimCompensation(a); err == nil && credit > 0 {
-		log.Printf("streak-bonus %s: 🎊 补偿领取 +%dc", logfmt.Label(a.UID, a.Nickname), credit)
 	}
 }

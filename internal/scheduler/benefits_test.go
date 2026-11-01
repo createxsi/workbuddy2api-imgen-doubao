@@ -39,7 +39,7 @@ func TestClaimBenefitsNoCreditIsNotLogged(t *testing.T) {
 	body = `{"code":0,"data":{"credit":500}}`
 	buf.Reset()
 	s.claimBenefits(a)
-	if !strings.Contains(buf.String(), "补偿领取 +500c") {
+	if !strings.Contains(buf.String(), "新手礼包 +500c") {
 		t.Fatalf("真到账应记日志: %s", buf.String())
 	}
 }
