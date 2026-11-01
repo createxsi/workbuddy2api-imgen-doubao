@@ -300,12 +300,15 @@ func clearRoutingModelCooldownsLocked(e *entry) {
 }
 
 // modelBlock TTL 常量（11102 负缓存退避）：
-// 首次命中 6h；半开到期后允许放行重试，再次命中 TTL = base × 2^min(hits-1, shift)；
-// 封顶 24h（最多一天再试一次）。该模型请求成功即由 BlockModelClear 清除。
+// 首次命中 2m；半开到期后允许放行重试，再次命中 TTL = base × 2^min(hits-1, shift)；
+// 封顶 10m。该模型请求成功即由 BlockModelClear 清除。
+//
+// 11102 不总是「这号真没这模型」，路径级、上游瞬时抖动也会给同一个码；原 6h/24h 会把
+// 一次误判放大成整池该模型 503。退避保留，真没模型的号反复命中升到 10m 封顶。
 const (
-	modelBlockBaseTTL = 6 * time.Hour
+	modelBlockBaseTTL = 2 * time.Minute
 	modelBlockShift   = 4
-	modelBlockMaxTTL  = 24 * time.Hour
+	modelBlockMaxTTL  = 10 * time.Minute
 )
 
 // BlockModelBackoff 11102「该后端无此模型」的 (账号, 模型) 负缓存入口

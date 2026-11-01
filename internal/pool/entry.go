@@ -152,7 +152,7 @@ type RateLimitedModel struct {
 // modelCooldown 单个 (账号, 模型) 的模型级独立冷却记录。
 // 承载两种「该模型在此账号上不可用」语义：
 //   - 6004 模型级限流：Until 对齐上游重置墙钟；ResetAt 记录权威恢复时刻。
-//   - 11102 该后端无此模型：Until 为指数退避 TTL（6h 起、封顶 24h）；Hits 记录
+//   - 11102 该后端无此模型：Until 为指数退避 TTL（2m 起、封顶 10m）；Hits 记录
 //     累计命中次数驱动退避（6004 无 hits 概念，Hits 恒 0）。
 type modelCooldown struct {
 	// Until 该模型的冷却截止（6004：now+min(resetAt-now, soft_rate_max)；11102：now+退避 TTL）。
@@ -481,7 +481,7 @@ type stateAccount struct {
 
 // stateModelCooldown 单个 (账号, 模型) 的模型级独立冷却持久化记录，与运行态
 // modelCooldown 同构（Until/ResetAt/Reason 字段名与语义对齐），落盘/恢复往返无损。
-// Hits 不落盘（重启后 11102 退避从 6h 基数重新学习，同 modelCost 口径）。
+// Hits 不落盘（重启后 11102 退避从 2m 基数重新学习，同 modelCost 口径）。
 type stateModelCooldown struct {
 	Until     time.Time `json:"until"`
 	ResetAt   time.Time `json:"reset_at,omitempty"`
