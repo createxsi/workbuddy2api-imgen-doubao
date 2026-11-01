@@ -783,11 +783,33 @@ func copyFile(srcPath, dstPath string) error {
 	return dst.Close()
 }
 
+// exeReleaseBudget 删「刚退出进程的 exe」的重试预算（实测 Windows 拒绝窗口 50~150ms）。
+var exeReleaseBudget = 2 * time.Second
+
+// removeFileRetrying 删除文件，失败时 20ms 起退避重试到 budget 用尽；文件不存在视为成功。
+func removeFileRetrying(path string, budget time.Duration) error {
+	deadline := time.Now().Add(budget)
+	wait := 20 * time.Millisecond
+	for {
+		err := os.Remove(path)
+		if err == nil || os.IsNotExist(err) {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(wait)
+		if wait < 160*time.Millisecond {
+			wait *= 2
+		}
+	}
+}
+
 // replaceWithRollback 把 stagePath 换到 targetPath，旧程序留在 targetPath+".old"；
 // restore 恢复旧程序（幂等），cleanup 删除备份。
 func replaceWithRollback(stagePath, targetPath string) (restore func() error, cleanup func(), err error) {
 	backup := targetPath + ".old"
-	if err := os.Remove(backup); err != nil && !os.IsNotExist(err) {
+	if err := removeFileRetrying(backup, exeReleaseBudget); err != nil {
 		return nil, nil, err
 	}
 	if err := os.Rename(targetPath, backup); err != nil {
@@ -798,7 +820,9 @@ func replaceWithRollback(stagePath, targetPath string) (restore func() error, cl
 		if restored {
 			return nil
 		}
-		if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		// targetPath 是刚退出的新版本：Windows 释放映像句柄有几十毫秒延迟，裸删会
+		// Access denied 让回滚整体放弃，故重试。
+		if err := removeFileRetrying(targetPath, exeReleaseBudget); err != nil {
 			return err
 		}
 		if err := os.Rename(backup, targetPath); err != nil {
@@ -807,7 +831,11 @@ func replaceWithRollback(stagePath, targetPath string) (restore func() error, cl
 		restored = true
 		return nil
 	}
-	cleanup = func() { _ = os.Remove(backup) }
+	cleanup = func() {
+		if err := removeFileRetrying(backup, exeReleaseBudget); err != nil {
+			log.Printf("WARN: [updater] 删除旧版本备份失败: %v", err)
+		}
+	}
 	if err := os.Rename(stagePath, targetPath); err != nil {
 		return nil, nil, errors.Join(err, restore())
 	}
@@ -827,7 +855,8 @@ func HandleSelfUpdate(args []string) (handled bool, err error) {
 		if err := waitForProcessExit(pid, 60*time.Second); err != nil {
 			return true, err
 		}
-		return true, os.Remove(args[3])
+		// 进程已退出 ≠ 映像句柄已释放，重试到释放为止，否则 helper 永远残留。
+		return true, removeFileRetrying(args[3], exeReleaseBudget)
 	}
 	if len(args) < 7 || args[1] != selfUpdateArg {
 		return false, nil
