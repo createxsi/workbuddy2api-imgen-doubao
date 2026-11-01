@@ -65,6 +65,14 @@ func (b *bridgeWriter) Write(p []byte) (int, error) {
 				b.err = err
 				return len(p), err
 			}
+		} else if b.live && strings.HasPrefix(frame, ":") {
+			// 注释帧（续写层的 keepalive）：翻译侧已开流时原样转给客户端喂活连接，
+			// SSE 规范下是 no-op；未开流时丢弃（不能抢先提交响应头）。
+			if _, err := io.WriteString(b.rw, ": keepalive\n\n"); err != nil {
+				b.err = err
+				return len(p), err
+			}
+			b.Flush()
 		}
 	}
 	return len(p), nil

@@ -435,12 +435,18 @@ func chatToResponse(obj map[string]any, meta *responsesMeta) map[string]any {
 	if chs, ok := obj["choices"].([]any); ok && len(chs) > 0 {
 		ch, _ := chs[0].(map[string]any)
 		msg, _ := ch["message"].(map[string]any)
+		status, incomplete = responsesStatus(str(ch["finish_reason"]))
+		// 截断（含断流）时正文 item 同样标 incomplete，客户端不把半截内容当完整结果。
+		msgStatus := "completed"
+		if status == "incomplete" {
+			msgStatus = "incomplete"
+		}
 		if rc := str(msg["reasoning_content"]); rc != "" {
 			output = append(output, map[string]any{"type": "reasoning", "id": "rs_" + randHex(),
 				"summary": []any{map[string]any{"type": "summary_text", "text": rc}}})
 		}
 		if t := textOf(msg["content"]); t != "" {
-			output = append(output, map[string]any{"type": "message", "id": "msg_" + randHex(), "status": "completed",
+			output = append(output, map[string]any{"type": "message", "id": "msg_" + randHex(), "status": msgStatus,
 				"role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": t, "annotations": []any{}}}})
 		}
 		tcs, _ := msg["tool_calls"].([]any)
@@ -449,7 +455,6 @@ func chatToResponse(obj map[string]any, meta *responsesMeta) map[string]any {
 			fn, _ := tm["function"].(map[string]any)
 			output = append(output, meta.toolItem("fc_"+randHex(), str(tm["id"]), str(fn["name"]), str(fn["arguments"]), "completed"))
 		}
-		status, incomplete = responsesStatus(str(ch["finish_reason"]))
 	}
 	u, _ := obj["usage"].(map[string]any)
 	var inc any
