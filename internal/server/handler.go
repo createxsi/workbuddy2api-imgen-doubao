@@ -1237,7 +1237,13 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		if peek.Stream {
 			// 流式：透传结束后立即关闭上游 body，避免 defer 在轮转场景下堆积 fd。
 			st.status = http.StatusOK
-			stats := newChatStatsReaderSince(rc, st.start)
+			// 截断自动续写（见 continue.go）：上游 finish_reason=length 且为纯文本/推理段、
+			// 客户端未带显式限额时，同账号同模型补发「已输出内容 + 续写指令」，多段拼成一条
+			// 流；客户端带限额且思考吃光预算（正文 0B）时同额度关思考重发一次（starved.go）。
+			// 位于 StreamHint 之下：续写段同样经过原生工具调用标记还原与协议桥。
+			cont := newContinueReader(r.Context(), h.cfg.Upstream, acct, body, clientIP, chatMeta, rc)
+			defer cont.Close()
+			stats := newChatStatsReaderSince(cont, st.start)
 			// gateway_hint（SSE）：成功状态 200 已开流，中途 error 帧透传时附加
 			// hint 字段（hintFn 惰性求值——正常流零开销，只有真撞到 error 帧才
 			// 组装请求上下文做判定）。
@@ -1351,6 +1357,32 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 			st.status = http.StatusBadGateway
 			st.outcome = reqlog.OutcomeHTTPError
 			return
+		}
+		// 空截断救援（见 starved.go）：额度被思考吃光、正文零字节。非流式没有 continueReader，
+		// 在这里同预算关思考重发一次、重新聚合；失败保留原响应。
+		if aggregateStarved(resp) && bodyHasOutputLimit(body) {
+			if rb, ok := starvedRetryBody(body); ok {
+				rc2, st2, _, e2 := h.cfg.Upstream.ChatStreamContext(r.Context(), acct, rb, clientIP, chatMeta)
+				switch {
+				case e2 == nil && st2 < 400 && rc2 != nil:
+					resp2, e3 := upstream.Aggregate(rc2)
+					rc2.Close()
+					if e3 == nil {
+						resp = resp2
+						log.Printf("INFO: [starved] non-stream acct=%s model=%s: 预算被思考吃光（正文 0B）→ 同额度关思考重发成功",
+							logfmt.Label(acct.UID, acct.Nickname), bareModel)
+					} else {
+						log.Printf("WARN: [starved] non-stream acct=%s model=%s: 重发聚合失败: %v",
+							logfmt.Label(acct.UID, acct.Nickname), bareModel, e3)
+					}
+				default:
+					if rc2 != nil {
+						rc2.Close()
+					}
+					log.Printf("WARN: [starved] non-stream acct=%s model=%s: 关思考重发失败（status=%d err=%v）→ 保留原截断响应",
+						logfmt.Label(acct.UID, acct.Nickname), bareModel, st2, e2)
+				}
+			}
 		}
 		// 标记修复（非流式）：把正文里的原生工具调用标记还原成 message.tool_calls。
 		// 只在「没有结构化 tool_calls」且「finish_reason 为 stop」时生效（见 dsml.go）；

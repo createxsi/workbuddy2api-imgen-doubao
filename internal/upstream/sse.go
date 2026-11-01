@@ -19,6 +19,11 @@ import (
 // 客户端已走，日志口径不同。Aggregate 与 StreamHint 共用同一哨兵（errors.Is 判定）。
 var errEmptyStream = errors.New("upstream stream contained no valid data events")
 
+// TruncationFinishReason 上游既无 finish_reason 也无 [DONE] 就断流时，续写层补发的截断
+// 终态取值。"length" 是 OpenAI 词表里唯一让 chat / responses（incomplete）/ messages
+// （max_tokens）三条适配都如实标截断的值，避免把半截输出当完整结果。
+const TruncationFinishReason = "length"
+
 // IsEmptyStreamError 报告错误是否为「上游空流」（无有效 SSE 帧）——供 handler
 // 在流式路径把空流记为失败观测（HTTP 头已发出只能 200，但日志/状态应收敛到
 // upstream_parse 同语义），与客户端断连类错误区分。
@@ -40,6 +45,7 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 		gotAnyContent bool
 		validEvents   int
 		sawDone       bool // 上游显式发过 data: [DONE]（正常收尾）
+		sawFinish     bool // 上游给过非空 finish_reason
 		toolCalls     = map[int]map[string]any{}
 		toolOrder     []int
 		// toolSeq 缺 index 的 tool_call 的分配序号源：跨帧延续「最近分配」槽位，
@@ -176,6 +182,7 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 							}
 							if fr, ok := c["finish_reason"].(string); ok && fr != "" {
 								finishReason = fr
+								sawFinish = true
 							}
 							if delta, ok := c["delta"].(map[string]any); ok {
 								if r2, ok := delta["role"].(string); ok && r2 != "" {
@@ -211,6 +218,11 @@ func Aggregate(r io.Reader) (map[string]any, error) {
 		// 上游返回 200 但没有任何有效数据事件（空流/只有 [DONE]/只有注释行）：
 		// 不再合成空 content 的假成功响应，直接报错，由 handler 映射为 502 upstream_parse。
 		return nil, errEmptyStream
+	}
+	// 断流如实上报：既无 finish_reason 也无 [DONE] 就 EOF，默认 "stop" 会让客户端把
+	// 半截内容当完整结果；改报截断终态（见 TruncationFinishReason）。
+	if !sawDone && !sawFinish {
+		finishReason = TruncationFinishReason
 	}
 	if id == "" {
 		id = fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
