@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"path/filepath"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -379,12 +379,14 @@ func TestChatSoftCoolsOnRateLimitBody(t *testing.T) {
 		t.Errorf("calls=%v want bad/good 各 1 次", calls)
 	}
 	st, _ := p.Status("bad")
-	if !st.Cooling || st.CoolKind != "soft_rate" {
-		t.Fatalf("bad 应进入 soft_rate 冷却: %+v", st)
+	// 普通 429 只停 (号, 模型)，账号本身不冷却。
+	rem := modelCoolRemaining(st, "glm-5.2")
+	if st.Cooling || rem <= 0 {
+		t.Fatalf("bad 应进入 glm-5.2 模型级冷却: %+v", st)
 	}
 	// 冷却时长取自注入的 SoftCooldown，不依赖真实等待。
-	if max := int64(soft / time.Second); st.CoolRemaining <= 0 || st.CoolRemaining > max {
-		t.Errorf("cool_remaining_sec=%d want in (0,%d]", st.CoolRemaining, max)
+	if rem > soft {
+		t.Errorf("model cool remaining=%v want <= %v", rem, soft)
 	}
 
 	// 冷却生效：同一账号在冷却期内不得再被选中。
@@ -533,8 +535,9 @@ func TestApplyErrorPolicyChannelRefusedDoesNotDisable(t *testing.T) {
 			if st.Disabled != tc.wantDisabled {
 				t.Errorf("disabled=%v want %v (%+v)", st.Disabled, tc.wantDisabled, st)
 			}
-			if st.Cooling != tc.wantCooling {
-				t.Errorf("cooling=%v want %v (%+v)", st.Cooling, tc.wantCooling, st)
+			cooling := st.Cooling || modelCoolRemaining(st, "glm-5.2") > 0
+			if cooling != tc.wantCooling {
+				t.Errorf("cooling=%v want %v (%+v)", cooling, tc.wantCooling, st)
 			}
 			if !tc.wantDisabled && st.ErrTotal != 0 {
 				t.Errorf("不罚号路径不应累计错误计数: err_total=%d", st.ErrTotal)
@@ -565,11 +568,9 @@ func TestNewHandlerSoftCooldownDefault(t *testing.T) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body)
 	}
 	st, _ := p.Status("bad")
-	if !st.Cooling || st.CoolKind != "soft_rate" {
-		t.Fatalf("bad 应进入 soft_rate 冷却: %+v", st)
-	}
-	if st.CoolRemaining <= 599 || st.CoolRemaining > 600 {
-		t.Errorf("default soft cooldown cool_remaining_sec=%d want 600", st.CoolRemaining)
+	rem := modelCoolRemaining(st, "glm-5.2")
+	if st.Cooling || rem <= 599*time.Second || rem > 600*time.Second {
+		t.Fatalf("bad 应进入 600s 模型级冷却: remaining=%v %+v", rem, st)
 	}
 }
 
@@ -2140,4 +2141,14 @@ func TestNoHealthyHintPointsAtRealmPrefix(t *testing.T) {
 	if got := h2.noHealthyHint("glm-5.3", "cn", "glm-5.3"); got != upstream.NoHealthyAccountHint() {
 		t.Errorf("另一域无健康号时应退回固定文案，got %q", got)
 	}
+}
+
+// modelCoolRemaining 账号对 model 的模型级冷却剩余时长（无则 0）。
+func modelCoolRemaining(st pool.Status, model string) time.Duration {
+	for _, m := range st.RateLimitedModels {
+		if m.Model == model {
+			return time.Until(m.Until)
+		}
+	}
+	return 0
 }

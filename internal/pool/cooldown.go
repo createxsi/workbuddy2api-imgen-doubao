@@ -189,6 +189,9 @@ func (p *Pool) CooldownSoftForModel(uid string, base time.Duration, resetAt time
 			if e.modelCooldowns == nil {
 				e.modelCooldowns = map[string]modelCooldown{}
 			}
+			if old, ok := e.modelCooldowns[model]; ok && !old.AuditOnly && old.Until.After(now) {
+				return // 并发失败不延长正在生效的模型冷却
+			}
 			hits := e.modelCooldowns[model].Hits + 1
 			e.modelCooldowns[model] = modelCooldown{
 				Until:  now.Add(p.softDurationLocked(base, hits)),
