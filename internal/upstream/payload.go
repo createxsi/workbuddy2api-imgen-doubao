@@ -29,6 +29,13 @@ func PrepareBodyOptWithEfforts(src []byte, sanitize bool, efforts map[string][]s
 // defaultEfforts（模型声明默认档）补档。defaultEfforts 为 nil 时与旧行为一致
 // （deepseek 缺档回退硬编码 high）。
 func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string) []byte {
+	return PrepareBodyOptWithEffortsDefaultAndCaps(src, sanitize, efforts, defaultEfforts, nil)
+}
+
+// PrepareBodyOptWithEffortsDefaultAndCaps 在 …AndDefault 之上接入模型输出上限快照：
+// 无显式限额的请求按目录值补 max_tokens（见 injectCatalogMaxTokens）。maxOut 为 nil
+// 时与 …AndDefault 完全一致。
+func PrepareBodyOptWithEffortsDefaultAndCaps(src []byte, sanitize bool, efforts map[string][]string, defaultEfforts map[string]string, maxOut map[string]int64) []byte {
 	if len(src) == 0 {
 		return src
 	}
@@ -43,6 +50,9 @@ func PrepareBodyOptWithEffortsAndDefault(src []byte, sanitize bool, efforts map[
 	// /console 同源）只认 max_tokens——别名透传会被上游忽略后回落默认输出上限
 	// （实测 32000），长流任务被截。
 	translateMaxCompletionTokens(obj)
+	// 目录值补默认输出上限：多数客户端（如 Codex）不发任何限额字段，上游回落保守默认
+	// （实测 32000）把长输出无声截断。
+	injectCatalogMaxTokens(obj, maxOut)
 	clampGPTMinMaxTokens(obj)
 	// stream_options 仅当 body 未显式带时补 {include_usage: true}（D7）：
 	// 官方 CLI 流式必发该字段，上游据此在末帧返回 usage 用量；显式带则不覆盖。
@@ -127,6 +137,21 @@ func translateMaxCompletionTokens(obj map[string]any) {
 
 // gptMinMaxTokens GPT 系上游接受的 max_tokens 下限。
 const gptMinMaxTokens = 16
+
+// injectCatalogMaxTokens 无显式输出限额时按模型目录声明的 maxOutputTokens 补 max_tokens。
+// 显式限额（含 max_completion_tokens 翻译产物）优先；模型未知 / 目录无值不补。
+func injectCatalogMaxTokens(obj map[string]any, maxOut map[string]int64) {
+	if len(maxOut) == 0 {
+		return
+	}
+	if _, has := obj["max_tokens"]; has {
+		return
+	}
+	model, _ := obj["model"].(string)
+	if v, ok := maxOut[model]; ok && v > 0 {
+		obj["max_tokens"] = v
+	}
+}
 
 // clampGPTMinMaxTokens 把 GPT 系模型过小的 max_tokens 抬到下限。
 //

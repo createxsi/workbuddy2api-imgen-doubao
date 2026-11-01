@@ -465,3 +465,61 @@ func TestClampGPTMinMaxTokens(t *testing.T) {
 		})
 	}
 }
+
+// TestInjectCatalogMaxTokens 无限额请求按目录值补 max_tokens；显式限额（含别名翻译）优先，
+// 未知模型 / 无快照不补。
+func TestInjectCatalogMaxTokens(t *testing.T) {
+	maxOut := map[string]int64{"deepseek-v4.1-flash": 393216}
+	get := func(body []byte) (any, bool) {
+		var m map[string]any
+		if err := json.Unmarshal(body, &m); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		v, ok := m["max_tokens"]
+		return v, ok
+	}
+	cases := []struct {
+		in     string
+		caps   map[string]int64
+		want   any
+		absent bool
+	}{
+		{`{"model":"deepseek-v4.1-flash","messages":[]}`, maxOut, float64(393216), false},
+		{`{"model":"deepseek-v4.1-flash","max_tokens":123,"messages":[]}`, maxOut, float64(123), false},
+		{`{"model":"deepseek-v4.1-flash","max_completion_tokens":456,"messages":[]}`, maxOut, float64(456), false},
+		{`{"model":"unknown","messages":[]}`, maxOut, nil, true},
+		{`{"model":"deepseek-v4.1-flash","messages":[]}`, nil, nil, true},
+	}
+	for _, c := range cases {
+		got, has := get(PrepareBodyOptWithEffortsDefaultAndCaps([]byte(c.in), false, nil, nil, c.caps))
+		if c.absent {
+			if has {
+				t.Errorf("%s: 不该补 max_tokens，got %v", c.in, got)
+			}
+			continue
+		}
+		if !has || got != c.want {
+			t.Errorf("%s: max_tokens=%v want %v", c.in, got, c.want)
+		}
+	}
+}
+
+// TestModelMaxOutSnapshotByRealm 输出上限快照按域分桶、整体替换，空目录不补。
+func TestModelMaxOutSnapshotByRealm(t *testing.T) {
+	c := &Client{}
+	if c.modelMaxOutSnapshot("cn") != nil {
+		t.Fatal("未刷新前应为 nil")
+	}
+	c.storeModelMaxOut("cn", []ModelInfo{{ID: "a", MaxTokens: 100}, {ID: "b"}})
+	c.storeModelMaxOut("global", []ModelInfo{{ID: "a", MaxTokens: 200}})
+	if got := c.modelMaxOutSnapshot("cn"); got["a"] != 100 || len(got) != 1 {
+		t.Fatalf("cn=%v", got)
+	}
+	if got := c.modelMaxOutSnapshot("global"); got["a"] != 200 {
+		t.Fatalf("global=%v", got)
+	}
+	c.storeModelMaxOut("cn", nil)
+	if c.modelMaxOutSnapshot("cn") != nil {
+		t.Fatal("空目录应清空")
+	}
+}

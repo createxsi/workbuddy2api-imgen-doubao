@@ -752,6 +752,9 @@ type Client struct {
 	// modelRates 缓存各模型当前生效积分倍率（规范化数值，如 "0.5"）。
 	// 与 efforts 共用 realm 分层和锁；每次成功刷新模型目录时整体替换对应域。
 	modelRates map[string]map[string]string
+	// modelMaxOut 各模型输出上限（maxOutputTokens，随模型目录刷新），供无限额请求补
+	// max_tokens。与 efforts 共用 realm 分层和锁。
+	modelMaxOut map[string]map[string]int64
 
 	// globalModels 缓存 global 模型名目录探测结果（成功 ∩ 静态 overlay；
 	// 1h TTL + 5min 负缓存），见 global_models.go。按实例持有，测试新建 Client 即隔离。
@@ -941,7 +944,7 @@ func (c *Client) prepareBody(body []byte, realm, uid, conversationID string) []b
 		// 静态表降级，不全程透传（issue #84：不支持的档位发往上游会 400）。
 		efforts, defs = globalEffortMap(efforts, defs)
 	}
-	body = PrepareBodyOptWithEffortsAndDefault(body, c.SanitizeFingerprints.Load(), efforts, defs)
+	body = PrepareBodyOptWithEffortsDefaultAndCaps(body, c.SanitizeFingerprints.Load(), efforts, defs, c.modelMaxOutSnapshot(realm))
 	// prompt_cache_key 注入（P0 费用优化，费用降 ~17×）：按账号隔离的稳定缓存键，
 	// 让同一客户端对同一账号的连续请求命中上游前缀缓存。
 	body = InjectPromptCacheKey(body, uid, conversationID)
@@ -1519,6 +1522,7 @@ func (c *Client) FetchModels(a *auth.Auth) ([]ModelInfo, error) {
 		return nil, fmt.Errorf("models api returned empty list")
 	}
 	c.storeModelRates(a.Realm(), out)
+	c.storeModelMaxOut(a.Realm(), out)
 	// 刷新 effort 能力缓存（供请求体降级；无 supportedEfforts 的模型不入桶）。
 	// 空桶时跳过写：避免「某探测无档位数据」清掉既有桶。
 	cache := make(map[string][]string, len(out))
@@ -1879,6 +1883,37 @@ func (c *Client) storeModelRates(realm string, infos []ModelInfo) {
 		c.modelRates = make(map[string]map[string]string)
 	}
 	c.modelRates[realmKey(realm)] = rates
+}
+
+// storeModelMaxOut 按 realm 整体替换模型输出上限快照（目录刷新即替换）。
+func (c *Client) storeModelMaxOut(realm string, infos []ModelInfo) {
+	m := make(map[string]int64, len(infos))
+	for _, mi := range infos {
+		if mi.ID != "" && mi.MaxTokens > 0 {
+			m[mi.ID] = mi.MaxTokens
+		}
+	}
+	c.effortsMu.Lock()
+	defer c.effortsMu.Unlock()
+	if c.modelMaxOut == nil {
+		c.modelMaxOut = make(map[string]map[string]int64)
+	}
+	c.modelMaxOut[realmKey(realm)] = m
+}
+
+// modelMaxOutSnapshot 输出上限快照副本；nil = 未知（不补默认）。
+func (c *Client) modelMaxOutSnapshot(realm string) map[string]int64 {
+	c.effortsMu.RLock()
+	defer c.effortsMu.RUnlock()
+	bucket := c.modelMaxOut[realmKey(realm)]
+	if len(bucket) == 0 {
+		return nil
+	}
+	cp := make(map[string]int64, len(bucket))
+	for k, v := range bucket {
+		cp[k] = v
+	}
+	return cp
 }
 
 // ModelRate 返回最近成功刷新的指定域模型生效倍率；未知返回空串。
