@@ -247,7 +247,7 @@ func isMPTaskCode(code string) bool { return mpTaskCodes[code] }
 // 双口径：mp 专属任务在默认列表查不到，自动回落 mp 列表（仅对已登记的 mp 码，
 // 未知码不多打一次上游）。
 func (p *Panel) taskByCode(a *auth.Auth, code string) (*upstream.Task, error) {
-	tasks, err := p.cfg.Upstream.ListTasks(a)
+	tasks, err := p.listTasksSoftRate(a, false)
 	if err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func (p *Panel) taskByCodeWaiting(a *auth.Auth, code string) (*upstream.Task, er
 // taskByCodeMP 以小程序口径拉取任务列表并定位单个任务；未找到返回 nil。
 // 小程序限定任务（school_season / Sequential_Tasks_1）在默认口径列表不出现。
 func (p *Panel) taskByCodeMP(a *auth.Auth, code string) (*upstream.Task, error) {
-	tasks, err := p.cfg.Upstream.ListTasksMP(a)
+	tasks, err := p.listTasksSoftRate(a, true)
 	if err != nil {
 		return nil, err
 	}
@@ -685,7 +685,7 @@ func (p *Panel) accountTaskAuto(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "skipped": true, "message": "该任务已领取过奖励"})
 		return
 	}
-	msg, err := act.run(p, a)
+	msg, err := p.runActSoftRate(a, act)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "执行失败: "+err.Error())
 		return
@@ -1346,7 +1346,7 @@ func (p *Panel) runAutoAll(a *auth.Auth) []map[string]any {
 			out = append(out, item)
 			continue
 		}
-		msg, err := act.run(p, a)
+		msg, err := p.runActSoftRate(a, &act)
 		if err != nil {
 			item["status"] = "error"
 			item["message"] = err.Error()

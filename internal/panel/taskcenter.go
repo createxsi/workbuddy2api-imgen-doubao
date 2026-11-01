@@ -450,7 +450,7 @@ func (p *Panel) runGrowthQueued(a *auth.Auth, code string) (string, error) {
 		log.Printf("panel: 队列 growth uid=%s code=%s: %s", a.UID, code, msg)
 		return msg, nil
 	}
-	msg, err := act.run(p, a)
+	msg, err := p.runActSoftRate(a, act)
 	if err != nil {
 		return "", err
 	}

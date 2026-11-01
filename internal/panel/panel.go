@@ -94,6 +94,8 @@ type Panel struct {
 	// 不同账号之间不互斥（并行照旧）。TryLock 语义，锁条目常驻（账号数有界）。
 	taskMu    sync.Mutex
 	taskLocks map[string]*sync.Mutex
+	// taskRate 任务链上游软限流窗口（按账号），见 autotask_softrate.go。
+	taskRate taskSoftRate
 
 	// 任务中心执行队列（taskcenter.go）。
 	queueOnce sync.Once
