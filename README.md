@@ -418,6 +418,8 @@ Claude Code 接入：`ANTHROPIC_BASE_URL=http://localhost:7863`（指到网关�
 | `upstream.header_timeout_seconds` | 回落 `timeout_seconds` | 聊天首字节前（响应头）上限 |
 | `upstream.idle_timeout_seconds` | `300` | 聊天流中空闲上限（活跃续命，静默断流） |
 | `upstream.user_agent` | 空 | 出站 User-Agent 覆盖（空 = 现状 `CLI/2.63.2 CodeBuddy/2.63.2`）。官网「使用端」列按出站 UA 服务端归因；官方 WorkBuddy 桌面 UA 为 `WorkBuddy/<version>`，需要时可配 |
+| `upstream.dump_dir` | 空 | 诊断用：非空时每次 chat 把出站请求体 + 上游原始响应落到该目录（单文件封顶 8 MB，写盘失败不影响请求）。正文含用户提示词，用完即关。也可用环境变量 `WB2A_DUMP_UPSTREAM`；需重启 |
+| `upstream.dump_max_bytes` | `0` | 落盘文件里出站请求体片段上限，0 = 256 KB；长会话看不到 tools 时调大 |
 | `features.sanitize_blacklist_fingerprints` | `true` | 出站请求体黑名单指纹脱敏 |
 | `models.hidden` | `[]` | 模型黑名单：不对外暴露的模型。裸名=两域都藏；`"cn:xxx"`/`"global:xxx"`=只藏该域。`GET /v1/models` 列表过滤 + `POST /v1/chat/completions` 与 `/v1/images/*` 点名拒绝（400 `model_unavailable`），`/v1/images/models` 同样过滤。面板「模型黑名单」保存后热生效 |
 | `models.aliases` | `[]` | 模型映射 `["claude-sonnet-4=hy3"]`：客户端只能填固定模型名时落到真实模型。键大小写不敏感；裸名键两域生效，`cn:`/`global:` 前缀键只在该域生效；真实名不带前缀时沿用请求的域，带前缀则按前缀。映射在黑名单检查之前（不能绕过 `models.hidden`），出站/选号/粘性/账本用真实名，响应 `model` 回显客户端原发名。面板「模型映射」保存后热生效 |
