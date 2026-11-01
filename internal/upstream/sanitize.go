@@ -123,6 +123,22 @@ var sanitizeRewrites = [][2]string{
 	},
 }
 
+// sanitizeDshPathsRe DSH 系统提示里「@ 路径怎么解析」整段说明：上游按连续原文判渠道
+// 特征（只发首句放行，前两句连排即 400 11128）。整段同义改写，语义保留（@ 路径、相对
+// 基准、结尾斜杠为目录、其余按文件读、@"..." 用于含空格路径）。覆盖两种线上结尾措辞；
+// 段外的 @（邮箱、包名）不匹配。
+var sanitizeDshPathsRe = regexp.MustCompile(
+	`(?is)Tokens prefixed with @ are paths the user explicitly referenced\..*?path (?:containing|that contains) spaces\.`)
+
+const sanitizeDshPathsProbe = "Tokens prefixed with @"
+
+const sanitizeDshPathsReplacement = "Paths beginning with @ refer to files the user explicitly mentioned. " +
+	"Relative paths are resolved against the project root; absolute paths point " +
+	"to files or directories on the host. A trailing slash marks a directory, so " +
+	"list it when its contents matter. Anything else is a file: open it with the " +
+	"read tool when its contents are needed, and never claim to have inspected it " +
+	"before reading. The @\"...\" form only quotes a path that contains spaces."
+
 // sanitizeText 单段文本净化：预检不中 → 返回原串（零分配）。
 func sanitizeText(text string) string {
 	if !hasFingerprint(text) {
@@ -130,6 +146,9 @@ func sanitizeText(text string) string {
 	}
 	for _, rw := range sanitizeRewrites {
 		text = strings.ReplaceAll(text, rw[0], rw[1])
+	}
+	if strings.Contains(text, sanitizeDshPathsProbe) {
+		text = sanitizeDshPathsRe.ReplaceAllLiteralString(text, sanitizeDshPathsReplacement)
 	}
 	text = sanitizeOmoRe.ReplaceAllString(text, "Sisyphus-Junior - Focused executor")
 	if sanitizeHdrRe.MatchString(text) {
@@ -153,6 +172,9 @@ func sanitizeText(text string) string {
 // 必须再用不要求冒号的 (?i) 正则兜底（sanitizeBareHdrRe），否则整条净化被跳过。
 // sanitizeBareHdrRe 不要求冒号，是 sanitizeHdrRe 的超集，故无需再单独匹配后者。
 func hasFingerprint(text string) bool {
+	if strings.Contains(text, sanitizeDshPathsProbe) {
+		return true
+	}
 	for _, f := range sanitizeFeatures {
 		if strings.Contains(text, f) {
 			return true

@@ -391,3 +391,25 @@ func newTestUpstream(t *testing.T, h http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(h)
 }
+
+func TestSanitizeDshPathsParagraph(t *testing.T) {
+	for _, para := range []string{
+		"Tokens prefixed with @ are paths the user explicitly referenced. Relative paths resolve against the workspace root.\nA trailing slash means a directory. The @\"...\" form quotes a path containing spaces.",
+		"Tokens prefixed with @ are paths the user explicitly referenced. Identify them and use the read tool. The @\"...\" form only quotes a path that contains spaces.",
+	} {
+		in := "Intro line.\n" + para + "\nOutro mail me@example.com."
+		out := sanitizeText(in)
+		if strings.Contains(out, "Tokens prefixed with @") || !strings.Contains(out, sanitizeDshPathsReplacement) {
+			t.Fatalf("段落未改写: %q", out)
+		}
+		if !strings.HasPrefix(out, "Intro line.\n") || !strings.HasSuffix(out, "\nOutro mail me@example.com.") {
+			t.Fatalf("段外内容被改: %q", out)
+		}
+		if sanitizeText(out) != out {
+			t.Fatal("应幂等")
+		}
+	}
+	if got := sanitizeText("write to me@example.com or @scope/pkg"); got != "write to me@example.com or @scope/pkg" {
+		t.Fatalf("段外 @ 不应改: %q", got)
+	}
+}
